@@ -6,6 +6,7 @@ import pandas as pd
 
 
 MOTION_POINTS = {"wrist", "thumb_tip", "index_tip", "middle_tip"}
+START_MODES = {"initial", "lookback"}
 
 
 def moving_average(values, window):
@@ -140,6 +141,54 @@ def direction_from_recent_motion(df, release_idx, hand, motion_point, direction_
     return dx / distance, dy / distance
 
 
+def point_values(row, hand, motion_point):
+    point = point_prefix(hand, motion_point)
+    return row[f"{point}_x"], row[f"{point}_y"]
+
+
+def wrist_tracking_ok(row, hand):
+    wrist_x = row[f"{hand}_wrist_x"]
+    wrist_y = row[f"{hand}_wrist_y"]
+    return row["pose_detected"] == True and not pd.isna(wrist_x) and not pd.isna(wrist_y)
+
+
+def choose_start_index(df, release_idx, hand, motion_point, start_mode, start_window, lookback):
+    release_pos = df.index.get_loc(release_idx)
+
+    if start_mode == "lookback":
+        start_pos = max(0, release_pos - lookback)
+        start_candidates = df.iloc[start_pos : release_pos + 1]
+        start_candidates = start_candidates[start_candidates["tracking_ok"] == True]
+        if len(start_candidates) >= 2:
+            return start_candidates.index[0]
+        return df.index[start_pos]
+
+    window_end = min(len(df), max(1, start_window))
+    initial = df.iloc[:window_end]
+    initial = initial[initial.apply(lambda row: wrist_tracking_ok(row, hand), axis=1)]
+
+    point = point_prefix(hand, motion_point)
+    point_initial = initial[
+        initial[f"{point}_x"].notna()
+        & initial[f"{point}_y"].notna()
+    ]
+    if not point_initial.empty:
+        return point_initial.index[0]
+
+    if not initial.empty:
+        return initial.index[0]
+
+    start_pos = max(0, release_pos - lookback)
+    return df.index[start_pos]
+
+
+def start_point_values(start_row, hand, motion_point):
+    point_x, point_y = point_values(start_row, hand, motion_point)
+    if not pd.isna(point_x) and not pd.isna(point_y):
+        return point_x, point_y
+    return start_row[f"{hand}_wrist_x"], start_row[f"{hand}_wrist_y"]
+
+
 def clamp(value, low, high):
     return max(low, min(high, value))
 
@@ -167,6 +216,8 @@ def analyze(
     output_csv,
     window,
     lookback,
+    start_mode,
+    start_window,
     direction_window,
     min_visibility,
     board_w,
@@ -179,6 +230,8 @@ def analyze(
         raise ValueError("--hand must be either right or left")
     if motion_point not in MOTION_POINTS | {"auto"}:
         raise ValueError(f"--motion-point must be one of: auto, {sorted(MOTION_POINTS)}")
+    if start_mode not in START_MODES:
+        raise ValueError(f"--start-mode must be one of: {sorted(START_MODES)}")
 
     required = [
         "frame_index",
@@ -211,18 +264,21 @@ def analyze(
     release_idx, threshold = find_release_candidate(df)
     release_row = df.loc[release_idx]
 
-    release_pos = df.index.get_loc(release_idx)
-    start_pos = max(0, release_pos - lookback)
-    start_candidates = df.iloc[start_pos : release_pos + 1]
-    start_candidates = start_candidates[start_candidates["tracking_ok"] == True]
-    if len(start_candidates) >= 2:
-        start_idx = start_candidates.index[0]
-    else:
-        start_idx = df.index[start_pos]
+    start_idx = choose_start_index(
+        df,
+        release_idx,
+        hand,
+        motion_point,
+        start_mode,
+        start_window,
+        lookback,
+    )
     start_row = df.loc[start_idx]
 
-    dx = release_row[f"{point}_x"] - start_row[f"{point}_x"]
-    dy = release_row[f"{point}_y"] - start_row[f"{point}_y"]
+    start_x, start_y = start_point_values(start_row, hand, motion_point)
+    release_x, release_y = point_values(release_row, hand, motion_point)
+    dx = release_x - start_x
+    dy = release_y - start_y
     dt = release_row["time_sec"] - start_row["time_sec"]
 
     if dt <= 0 or pd.isna(dt) or any(pd.isna(value) for value in [dx, dy]):
@@ -236,15 +292,16 @@ def analyze(
     else:
         direction_x, direction_y = dx / distance, dy / distance
 
-    recent_direction = direction_from_recent_motion(
-        df,
-        release_idx,
-        hand,
-        motion_point,
-        direction_window,
-    )
-    if recent_direction:
-        direction_x, direction_y = recent_direction
+    if start_mode == "lookback":
+        recent_direction = direction_from_recent_motion(
+            df,
+            release_idx,
+            hand,
+            motion_point,
+            direction_window,
+        )
+        if recent_direction:
+            direction_x, direction_y = recent_direction
 
     angle_deg = math.degrees(math.atan2(direction_y, direction_x))
     hit_x, hit_y = calculate_hit_position(
@@ -265,10 +322,11 @@ def analyze(
     df["throw_direction_y"] = direction_y
     df["throw_release_speed"] = release_row["filtered_speed"]
     df["throw_motion_point"] = motion_point
-    df["throw_release_x"] = release_row[f"{point}_x"]
-    df["throw_release_y"] = release_row[f"{point}_y"]
-    df["throw_start_x"] = start_row[f"{point}_x"]
-    df["throw_start_y"] = start_row[f"{point}_y"]
+    df["throw_start_mode"] = start_mode
+    df["throw_release_x"] = release_x
+    df["throw_release_y"] = release_y
+    df["throw_start_x"] = start_x
+    df["throw_start_y"] = start_y
 
     if output_csv:
         output_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -278,6 +336,7 @@ def analyze(
     print(f"Input CSV: {csv_path}")
     print(f"Hand: {hand}")
     print(f"Motion point: {motion_point}")
+    print(f"Start mode: {start_mode}")
     print(f"Start frame: {int(start_row['frame_index'])} ({start_row['time_sec']:.4f}s)")
     print(f"Release candidate frame: {int(release_row['frame_index'])} ({release_row['time_sec']:.4f}s)")
     print(f"Release speed threshold: {threshold:.4f}")
@@ -331,7 +390,19 @@ def main():
         "--lookback",
         type=int,
         default=10,
-        help="Frames before release candidate used as start frame",
+        help="Frames before release candidate used as start frame in lookback mode",
+    )
+    parser.add_argument(
+        "--start-mode",
+        choices=["initial", "lookback"],
+        default="initial",
+        help="How to choose the start frame",
+    )
+    parser.add_argument(
+        "--start-window",
+        type=int,
+        default=60,
+        help="Initial frames searched for the start frame in initial mode",
     )
     parser.add_argument(
         "--direction-window",
@@ -362,6 +433,8 @@ def main():
         args.out,
         args.window,
         args.lookback,
+        args.start_mode,
+        args.start_window,
         args.direction_window,
         args.min_visibility,
         args.board_w,
