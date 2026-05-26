@@ -1,6 +1,6 @@
 {
-  "shutter_x": 540,
-  "shutter_y": 2150,
+  "shutter_x": 1953,
+  "shutter_y": 540,
   "record_seconds": 2.0,
   "save_wait_seconds": 3.0,
   "remote_camera_dir": "/sdcard/DCIM/Camera",
