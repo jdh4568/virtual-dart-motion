@@ -5,18 +5,39 @@ from pathlib import Path
 import pandas as pd
 
 
+MOTION_POINTS = {"wrist", "thumb_tip", "index_tip", "middle_tip"}
+
+
 def moving_average(values, window):
     return values.rolling(window=window, center=True, min_periods=1).mean()
 
 
-def calculate_speed(df, hand):
-    wrist_x = f"{hand}_wrist_x"
-    wrist_y = f"{hand}_wrist_y"
+def point_prefix(hand, motion_point):
+    return f"{hand}_{motion_point}"
 
-    df["raw_dx"] = df[wrist_x].diff()
-    df["raw_dy"] = df[wrist_y].diff()
-    df["dx"] = df[wrist_x].diff()
-    df["dy"] = df[wrist_y].diff()
+
+def resolve_motion_point(df, hand, motion_point):
+    if motion_point != "auto":
+        return motion_point
+
+    for candidate in ["index_tip", "middle_tip", "thumb_tip"]:
+        x_column = f"{hand}_{candidate}_x"
+        y_column = f"{hand}_{candidate}_y"
+        if x_column in df.columns and y_column in df.columns:
+            detected_ratio = df[[x_column, y_column]].notna().all(axis=1).mean()
+            if detected_ratio >= 0.2:
+                return candidate
+
+    return "wrist"
+
+
+def calculate_speed(df, hand, motion_point):
+    point = point_prefix(hand, motion_point)
+
+    df["raw_dx"] = df[f"{point}_x"].diff()
+    df["raw_dy"] = df[f"{point}_y"].diff()
+    df["dx"] = df[f"{point}_x"].diff()
+    df["dy"] = df[f"{point}_y"].diff()
     df["dt"] = df["time_sec"].diff()
     df["speed"] = ((df["dx"] ** 2 + df["dy"] ** 2) ** 0.5) / df["dt"]
     return df
@@ -43,12 +64,15 @@ def calculate_elbow_angle(row, hand):
     return math.degrees(math.acos(cos_theta))
 
 
-def filter_unreliable_motion(df, hand, min_visibility):
+def filter_unreliable_motion(df, hand, motion_point, min_visibility):
     visibility_columns = [
         f"{hand}_shoulder_visibility",
         f"{hand}_elbow_visibility",
         f"{hand}_wrist_visibility",
     ]
+    point_visibility = f"{point_prefix(hand, motion_point)}_visibility"
+    if point_visibility not in visibility_columns:
+        visibility_columns.append(point_visibility)
     available_visibility = [column for column in visibility_columns if column in df.columns]
 
     if available_visibility:
@@ -57,6 +81,13 @@ def filter_unreliable_motion(df, hand, min_visibility):
             df["tracking_ok"] = df["tracking_ok"] & (df[column] >= min_visibility)
     else:
         df["tracking_ok"] = df["pose_detected"] == True
+
+    point = point_prefix(hand, motion_point)
+    df["tracking_ok"] = (
+        df["tracking_ok"]
+        & df[f"{point}_x"].notna()
+        & df[f"{point}_y"].notna()
+    )
 
     speed_cap = df.loc[df["tracking_ok"], "speed"].quantile(0.98)
     if pd.isna(speed_cap) or speed_cap <= 0:
@@ -87,7 +118,7 @@ def find_release_candidate(df, speed_threshold_ratio=0.45):
     return release_idx, threshold
 
 
-def direction_from_recent_motion(df, release_idx, hand, direction_window):
+def direction_from_recent_motion(df, release_idx, hand, motion_point, direction_window):
     release_pos = df.index.get_loc(release_idx)
     start_pos = max(0, release_pos - direction_window)
     recent = df.iloc[start_pos : release_pos + 1]
@@ -98,8 +129,9 @@ def direction_from_recent_motion(df, release_idx, hand, direction_window):
 
     start_row = recent.iloc[0]
     release_row = recent.iloc[-1]
-    dx = release_row[f"{hand}_wrist_x"] - start_row[f"{hand}_wrist_x"]
-    dy = release_row[f"{hand}_wrist_y"] - start_row[f"{hand}_wrist_y"]
+    point = point_prefix(hand, motion_point)
+    dx = release_row[f"{point}_x"] - start_row[f"{point}_x"]
+    dy = release_row[f"{point}_y"] - start_row[f"{point}_y"]
     distance = math.hypot(dx, dy)
 
     if distance == 0 or pd.isna(distance):
@@ -116,6 +148,9 @@ def calculate_hit_position(direction_x, direction_y, speed, board_w, board_h, se
     center_x = (board_w - 1) / 2
     center_y = (board_h - 1) / 2
 
+    if any(pd.isna(value) for value in [direction_x, direction_y, speed]):
+        direction_x, direction_y, speed = 0.0, 0.0, 0.0
+
     hit_x = center_x + direction_x * speed * sensitivity
     hit_y = center_y + direction_y * speed * sensitivity
 
@@ -128,6 +163,7 @@ def calculate_hit_position(direction_x, direction_y, speed, board_w, board_h, se
 def analyze(
     csv_path,
     hand,
+    motion_point,
     output_csv,
     window,
     lookback,
@@ -141,6 +177,8 @@ def analyze(
     hand = hand.lower()
     if hand not in {"right", "left"}:
         raise ValueError("--hand must be either right or left")
+    if motion_point not in MOTION_POINTS | {"auto"}:
+        raise ValueError(f"--motion-point must be one of: auto, {sorted(MOTION_POINTS)}")
 
     required = [
         "frame_index",
@@ -153,6 +191,10 @@ def analyze(
         f"{hand}_wrist_x",
         f"{hand}_wrist_y",
     ]
+    motion_point = resolve_motion_point(df, hand, motion_point)
+    point = point_prefix(hand, motion_point)
+    required.extend([f"{point}_x", f"{point}_y"])
+
     missing = [column for column in required if column not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
@@ -161,23 +203,29 @@ def analyze(
     for column in numeric_columns:
         df[column] = pd.to_numeric(df[column], errors="coerce")
 
-    df = calculate_speed(df, hand)
-    df = filter_unreliable_motion(df, hand, min_visibility)
+    df = calculate_speed(df, hand, motion_point)
+    df = filter_unreliable_motion(df, hand, motion_point, min_visibility)
     df["smooth_speed"] = moving_average(df["filtered_speed"].fillna(0), window)
     df["elbow_angle"] = df.apply(lambda row: calculate_elbow_angle(row, hand), axis=1)
 
     release_idx, threshold = find_release_candidate(df)
     release_row = df.loc[release_idx]
 
-    start_pos = max(0, df.index.get_loc(release_idx) - lookback)
-    start_idx = df.index[start_pos]
+    release_pos = df.index.get_loc(release_idx)
+    start_pos = max(0, release_pos - lookback)
+    start_candidates = df.iloc[start_pos : release_pos + 1]
+    start_candidates = start_candidates[start_candidates["tracking_ok"] == True]
+    if len(start_candidates) >= 2:
+        start_idx = start_candidates.index[0]
+    else:
+        start_idx = df.index[start_pos]
     start_row = df.loc[start_idx]
 
-    dx = release_row[f"{hand}_wrist_x"] - start_row[f"{hand}_wrist_x"]
-    dy = release_row[f"{hand}_wrist_y"] - start_row[f"{hand}_wrist_y"]
+    dx = release_row[f"{point}_x"] - start_row[f"{point}_x"]
+    dy = release_row[f"{point}_y"] - start_row[f"{point}_y"]
     dt = release_row["time_sec"] - start_row["time_sec"]
 
-    if dt <= 0 or pd.isna(dt):
+    if dt <= 0 or pd.isna(dt) or any(pd.isna(value) for value in [dx, dy]):
         avg_speed = 0.0
     else:
         avg_speed = math.hypot(dx, dy) / dt
@@ -188,7 +236,13 @@ def analyze(
     else:
         direction_x, direction_y = dx / distance, dy / distance
 
-    recent_direction = direction_from_recent_motion(df, release_idx, hand, direction_window)
+    recent_direction = direction_from_recent_motion(
+        df,
+        release_idx,
+        hand,
+        motion_point,
+        direction_window,
+    )
     if recent_direction:
         direction_x, direction_y = recent_direction
 
@@ -210,6 +264,11 @@ def analyze(
     df["throw_direction_x"] = direction_x
     df["throw_direction_y"] = direction_y
     df["throw_release_speed"] = release_row["filtered_speed"]
+    df["throw_motion_point"] = motion_point
+    df["throw_release_x"] = release_row[f"{point}_x"]
+    df["throw_release_y"] = release_row[f"{point}_y"]
+    df["throw_start_x"] = start_row[f"{point}_x"]
+    df["throw_start_y"] = start_row[f"{point}_y"]
 
     if output_csv:
         output_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -218,12 +277,16 @@ def analyze(
     print("Throw analysis result")
     print(f"Input CSV: {csv_path}")
     print(f"Hand: {hand}")
+    print(f"Motion point: {motion_point}")
     print(f"Start frame: {int(start_row['frame_index'])} ({start_row['time_sec']:.4f}s)")
     print(f"Release candidate frame: {int(release_row['frame_index'])} ({release_row['time_sec']:.4f}s)")
     print(f"Release speed threshold: {threshold:.4f}")
     print(f"Release raw speed: {release_row['speed']:.4f}")
     print(f"Release smooth speed: {release_row['smooth_speed']:.4f}")
     print(f"Tracking OK at release: {release_row['tracking_ok']}")
+    print(
+        f"Release point: ({release_row[f'{point}_x']:.4f}, {release_row[f'{point}_y']:.4f})"
+    )
     print(f"Average throw speed: {avg_speed:.4f}")
     print(f"Direction vector: ({direction_x:.4f}, {direction_y:.4f})")
     print(f"Direction angle: {angle_deg:.2f} degrees")
@@ -245,6 +308,12 @@ def main():
         choices=["right", "left"],
         default="right",
         help="Throwing hand to analyze",
+    )
+    parser.add_argument(
+        "--motion-point",
+        choices=["auto", "wrist", "thumb_tip", "index_tip", "middle_tip"],
+        default="auto",
+        help="Landmark used for release timing and throw direction",
     )
     parser.add_argument(
         "--out",
@@ -289,6 +358,7 @@ def main():
     analyze(
         args.csv,
         args.hand,
+        args.motion_point,
         args.out,
         args.window,
         args.lookback,

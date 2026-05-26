@@ -5,6 +5,12 @@ import cv2
 import pandas as pd
 
 
+def video_writer_fps(fps):
+    if not fps or fps <= 0:
+        return 30
+    return max(1, int(round(fps)))
+
+
 def read_markers(analysis_csv):
     df = pd.read_csv(analysis_csv)
     start_rows = df[df["is_start_frame"] == True]
@@ -62,10 +68,39 @@ def draw_label(frame, text, origin, color):
     )
 
 
-def draw_wrist_marker(frame, row, hand, label, color):
+def point_from_row(row, hand, point_kind):
+    if point_kind == "start" and hasattr(row, "throw_start_x") and hasattr(row, "throw_start_y"):
+        x = getattr(row, "throw_start_x")
+        y = getattr(row, "throw_start_y")
+        if not pd.isna(x) and not pd.isna(y):
+            return x, y
+
+    if point_kind == "release" and hasattr(row, "throw_release_x") and hasattr(row, "throw_release_y"):
+        x = getattr(row, "throw_release_x")
+        y = getattr(row, "throw_release_y")
+        if not pd.isna(x) and not pd.isna(y):
+            return x, y
+
+    return getattr(row, f"{hand}_wrist_x"), getattr(row, f"{hand}_wrist_y")
+
+
+def current_motion_point_from_row(row, hand):
+    motion_point = getattr(row, "throw_motion_point", "wrist")
+    x_name = f"{hand}_{motion_point}_x"
+    y_name = f"{hand}_{motion_point}_y"
+
+    if hasattr(row, x_name) and hasattr(row, y_name):
+        x = getattr(row, x_name)
+        y = getattr(row, y_name)
+        if not pd.isna(x) and not pd.isna(y):
+            return x, y
+
+    return getattr(row, f"{hand}_wrist_x"), getattr(row, f"{hand}_wrist_y")
+
+
+def draw_point_marker(frame, row, hand, point_kind, label, color):
     height, width = frame.shape[:2]
-    x = row[f"{hand}_wrist_x"]
-    y = row[f"{hand}_wrist_y"]
+    x, y = point_from_row(row, hand, point_kind)
 
     if pd.isna(x) or pd.isna(y):
         return
@@ -139,7 +174,12 @@ def render_preview(
     trajectory_points = load_trajectory_points(trajectory_csv, width, height)
 
     output_video.parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(str(output_video), fourcc, fps, (width, height))
+    writer = cv2.VideoWriter(
+        str(output_video),
+        fourcc,
+        video_writer_fps(fps),
+        (width, height),
+    )
 
     frame_index = 0
 
@@ -155,20 +195,19 @@ def render_preview(
 
         if frame_index in frame_lookup:
             row = frame_lookup[frame_index]
-            wrist_x = getattr(row, f"{hand}_wrist_x")
-            wrist_y = getattr(row, f"{hand}_wrist_y")
+            point_x, point_y = current_motion_point_from_row(row, hand)
 
-            if not pd.isna(wrist_x) and not pd.isna(wrist_y):
-                px = int(wrist_x * width)
-                py = int(wrist_y * height)
+            if not pd.isna(point_x) and not pd.isna(point_y):
+                px = int(point_x * width)
+                py = int(point_y * height)
                 cv2.circle(frame, (px, py), 7, (0, 255, 255), -1)
 
         if frame_index == start_frame:
-            draw_wrist_marker(frame, start_row, hand, "START", (128, 128, 128))
+            draw_point_marker(frame, start_row, hand, "start", "START", (128, 128, 128))
             draw_label(frame, "START FRAME", (24, 72), (200, 200, 200))
 
         if frame_index == release_frame:
-            draw_wrist_marker(frame, release_row, hand, "RELEASE", (0, 0, 255))
+            draw_point_marker(frame, release_row, hand, "release", "RELEASE", (0, 0, 255))
             draw_label(frame, "RELEASE CANDIDATE", (24, 72), (0, 0, 255))
 
         if start_frame <= frame_index <= release_frame:
