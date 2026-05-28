@@ -5,6 +5,12 @@ from pathlib import Path
 import cv2
 
 
+HSV_PRESETS = {
+    "lime": ((35, 60, 60), (90, 255, 255)),
+    "blue": ((90, 70, 50), (135, 255, 255)),
+}
+
+
 def centroid_from_mask(mask, min_area, max_area):
     mask = cv2.medianBlur(mask, 5)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
@@ -45,10 +51,17 @@ def find_hsv_object(frame, hsv_lower, hsv_upper, min_area, max_area):
     return centroid_from_mask(mask, min_area, max_area)
 
 
+def hsv_range(mode, hsv_lower, hsv_upper):
+    if hsv_lower is not None and hsv_upper is not None:
+        return hsv_lower, hsv_upper
+    return HSV_PRESETS[mode]
+
+
 def find_object(frame, mode, threshold, hsv_lower, hsv_upper, min_area, max_area):
     if mode == "bright":
         return find_bright_object(frame, threshold, min_area, max_area)
-    return find_hsv_object(frame, hsv_lower, hsv_upper, min_area, max_area)
+    lower, upper = hsv_range(mode, hsv_lower, hsv_upper)
+    return find_hsv_object(frame, lower, upper, min_area, max_area)
 
 
 def video_writer_fps(fps):
@@ -99,10 +112,10 @@ def track_object(
     video_path,
     output_csv,
     preview_path=None,
-    mode="lime",
+    mode="blue",
     threshold=210,
-    hsv_lower=(35, 60, 60),
-    hsv_upper=(90, 255, 255),
+    hsv_lower=None,
+    hsv_upper=None,
     min_area=8,
     max_area=3000,
     start_frame=0,
@@ -202,8 +215,9 @@ def track_object(
     if mode == "bright":
         print(f"Threshold: {threshold}")
     else:
-        print(f"HSV lower: {hsv_lower}")
-        print(f"HSV upper: {hsv_upper}")
+        lower, upper = hsv_range(mode, hsv_lower, hsv_upper)
+        print(f"HSV lower: {lower}")
+        print(f"HSV upper: {upper}")
     print(f"Area range: {min_area}-{max_area}")
     print(f"Tracked frames: {tracked_count}/{frame_index}")
 
@@ -245,21 +259,39 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["lime", "bright"],
-        default="lime",
-        help="Object tracking mode. lime uses HSV color tracking; bright uses grayscale thresholding.",
+        choices=["blue", "lime", "bright"],
+        default="blue",
+        help="Object tracking mode. blue/lime use HSV color tracking; bright uses grayscale thresholding.",
     )
     parser.add_argument("--threshold", type=int, default=210, help="Brightness threshold for bright mode")
-    parser.add_argument("--h-min", type=int, default=35, help="Minimum HSV hue for lime mode")
-    parser.add_argument("--h-max", type=int, default=90, help="Maximum HSV hue for lime mode")
-    parser.add_argument("--s-min", type=int, default=60, help="Minimum HSV saturation for lime mode")
-    parser.add_argument("--s-max", type=int, default=255, help="Maximum HSV saturation for lime mode")
-    parser.add_argument("--v-min", type=int, default=60, help="Minimum HSV value for lime mode")
-    parser.add_argument("--v-max", type=int, default=255, help="Maximum HSV value for lime mode")
+    parser.add_argument("--h-min", type=int, help="Minimum HSV hue for HSV modes")
+    parser.add_argument("--h-max", type=int, help="Maximum HSV hue for HSV modes")
+    parser.add_argument("--s-min", type=int, help="Minimum HSV saturation for HSV modes")
+    parser.add_argument("--s-max", type=int, help="Maximum HSV saturation for HSV modes")
+    parser.add_argument("--v-min", type=int, help="Minimum HSV value for HSV modes")
+    parser.add_argument("--v-max", type=int, help="Maximum HSV value for HSV modes")
     parser.add_argument("--min-area", type=float, default=8, help="Minimum blob area")
     parser.add_argument("--max-area", type=float, default=3000, help="Maximum blob area")
     parser.add_argument("--start-frame", type=int, default=0, help="First frame to start tracking")
     args = parser.parse_args()
+
+    hsv_lower = None
+    hsv_upper = None
+    if args.mode != "bright" and any(
+        value is not None
+        for value in [args.h_min, args.h_max, args.s_min, args.s_max, args.v_min, args.v_max]
+    ):
+        preset_lower, preset_upper = HSV_PRESETS[args.mode]
+        hsv_lower = (
+            args.h_min if args.h_min is not None else preset_lower[0],
+            args.s_min if args.s_min is not None else preset_lower[1],
+            args.v_min if args.v_min is not None else preset_lower[2],
+        )
+        hsv_upper = (
+            args.h_max if args.h_max is not None else preset_upper[0],
+            args.s_max if args.s_max is not None else preset_upper[1],
+            args.v_max if args.v_max is not None else preset_upper[2],
+        )
 
     track_object(
         video_path=args.video,
@@ -267,8 +299,8 @@ def main():
         preview_path=args.preview,
         mode=args.mode,
         threshold=args.threshold,
-        hsv_lower=(args.h_min, args.s_min, args.v_min),
-        hsv_upper=(args.h_max, args.s_max, args.v_max),
+        hsv_lower=hsv_lower,
+        hsv_upper=hsv_upper,
         min_area=args.min_area,
         max_area=args.max_area,
         start_frame=args.start_frame,

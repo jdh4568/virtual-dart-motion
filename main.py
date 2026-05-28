@@ -275,12 +275,12 @@ def run_calibration_flow(config_path=Path("adb_config.json"), calibration_path=P
 
     object_csv = outputs["output_dir"] / f"{outputs['run_name']}_object_trajectory.csv"
     object_preview = outputs["output_dir"] / f"{outputs['run_name']}_object_preview.mp4"
-    print("\n[캘리브레이션] 연두색 물체 궤적 추적 중...")
+    print("\n[캘리브레이션] 파란색 물체 궤적 추적 중...")
     track_object(
         video_path=video_path,
         output_csv=object_csv,
         preview_path=object_preview,
-        mode="lime",
+        mode="blue",
     )
 
     print("\n[캘리브레이션] 예측 궤적과 물체 궤적 비교 중...")
