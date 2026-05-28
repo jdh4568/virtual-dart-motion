@@ -51,9 +51,54 @@ def find_object(frame, mode, threshold, hsv_lower, hsv_upper, min_area, max_area
     return find_hsv_object(frame, hsv_lower, hsv_upper, min_area, max_area)
 
 
+def video_writer_fps(fps):
+    if not fps or fps <= 0:
+        return 30
+    return max(1, int(round(fps)))
+
+
+def draw_tracking_preview(frame, tracked_points, point):
+    for i in range(1, len(tracked_points)):
+        cv2.line(
+            frame,
+            tracked_points[i - 1],
+            tracked_points[i],
+            (0, 255, 255),
+            3,
+            cv2.LINE_AA,
+        )
+
+    if point is not None:
+        px, py = int(round(point[0])), int(round(point[1]))
+        cv2.circle(frame, (px, py), 10, (0, 255, 0), -1)
+        cv2.circle(frame, (px, py), 14, (255, 255, 255), 2)
+        cv2.putText(
+            frame,
+            "OBJECT",
+            (px + 16, py - 12),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 0),
+            2,
+            cv2.LINE_AA,
+        )
+    else:
+        cv2.putText(
+            frame,
+            "OBJECT LOST",
+            (24, 42),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 0, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
+
 def track_object(
     video_path,
     output_csv,
+    preview_path=None,
     mode="lime",
     threshold=210,
     hsv_lower=(35, 60, 60),
@@ -71,7 +116,19 @@ def track_object(
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     output_csv.parent.mkdir(parents=True, exist_ok=True)
+    preview_writer = None
+    if preview_path:
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        preview_writer = cv2.VideoWriter(
+            str(preview_path),
+            fourcc,
+            video_writer_fps(fps),
+            (width, height),
+        )
+
     tracked_count = 0
+    tracked_points = []
 
     with output_csv.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.DictWriter(
@@ -117,6 +174,7 @@ def track_object(
             }
             if point is not None:
                 px, py = point
+                tracked_points.append((int(round(px)), int(round(py))))
                 row["x"] = px / width
                 row["y"] = py / height
                 row["pixel_x"] = px
@@ -124,12 +182,22 @@ def track_object(
                 tracked_count += 1
 
             writer.writerow(row)
+
+            if preview_writer:
+                annotated = frame.copy()
+                draw_tracking_preview(annotated, tracked_points, point)
+                preview_writer.write(annotated)
+
             frame_index += 1
 
     cap.release()
+    if preview_writer:
+        preview_writer.release()
 
     print(f"Video: {video_path}")
     print(f"Object CSV: {output_csv}")
+    if preview_path:
+        print(f"Preview saved: {preview_path}")
     print(f"Mode: {mode}")
     if mode == "bright":
         print(f"Threshold: {threshold}")
@@ -143,6 +211,7 @@ def track_object(
 def track_bright_object(
     video_path,
     output_csv,
+    preview_path=None,
     threshold=210,
     min_area=8,
     max_area=3000,
@@ -151,6 +220,7 @@ def track_bright_object(
     track_object(
         video_path=video_path,
         output_csv=output_csv,
+        preview_path=preview_path,
         mode="bright",
         threshold=threshold,
         min_area=min_area,
@@ -167,6 +237,11 @@ def main():
         type=Path,
         default=Path("output/object_trajectory.csv"),
         help="Output object trajectory CSV path",
+    )
+    parser.add_argument(
+        "--preview",
+        type=Path,
+        help="Optional object tracking preview video path",
     )
     parser.add_argument(
         "--mode",
@@ -189,6 +264,7 @@ def main():
     track_object(
         video_path=args.video,
         output_csv=args.out,
+        preview_path=args.preview,
         mode=args.mode,
         threshold=args.threshold,
         hsv_lower=(args.h_min, args.s_min, args.v_min),

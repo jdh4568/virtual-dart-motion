@@ -274,10 +274,12 @@ def run_calibration_flow(config_path=Path("adb_config.json"), calibration_path=P
     outputs = run_analysis(video_path, args, calibration={})
 
     object_csv = outputs["output_dir"] / f"{outputs['run_name']}_object_trajectory.csv"
+    object_preview = outputs["output_dir"] / f"{outputs['run_name']}_object_preview.mp4"
     print("\n[캘리브레이션] 연두색 물체 궤적 추적 중...")
     track_object(
         video_path=video_path,
         output_csv=object_csv,
+        preview_path=object_preview,
         mode="lime",
     )
 
@@ -290,6 +292,7 @@ def run_calibration_flow(config_path=Path("adb_config.json"), calibration_path=P
         board_distance=DEFAULTS["board_distance"],
     )
     print(f"\n[캘리브레이션 완료] 보정 파일: {calibration_path}")
+    print(f"[캘리브레이션 확인 영상] 물체 추적 영상: {object_preview}")
 
 
 def run_game_flow(config_path=Path("adb_config.json"), calibration_path=Path("calibration.json")):
