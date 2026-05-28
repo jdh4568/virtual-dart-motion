@@ -2,10 +2,13 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from src.adb_capture import AdbCaptureError, capture_video
 from src.analyze_throw import analyze
+from src.calibrate_trajectory import calibrate
 from src.extract_landmarks import extract_pose
+from src.object_tracking import track_object
 from src.render_analysis_preview import render_preview
 from src.simulate_board import read_hit_position, render_board
 from src.trajectory import predict
@@ -115,6 +118,24 @@ def parse_args():
     parser.add_argument("--board-scale", type=float, default=None)
     parser.add_argument("--speed-to-mps", type=float, default=None)
     return parser.parse_args()
+
+
+def default_runtime_args(**overrides):
+    values = {
+        "hand": DEFAULTS["hand"],
+        "motion_point": DEFAULTS["motion_point"],
+        "flip_horizontal": False,
+        "start_mode": DEFAULTS["start_mode"],
+        "start_window": None,
+        "release_offset_frames": None,
+        "board_distance": None,
+        "gravity": None,
+        "velocity_scale": None,
+        "board_scale": None,
+        "speed_to_mps": None,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
 
 
 def run_analysis(video_path, args, calibration):
@@ -234,8 +255,85 @@ def run_analysis(video_path, args, calibration):
     print(f"궤적 이미지: {trajectory_png}")
     print(f"분석 영상: {analysis_preview}")
 
+    return {
+        "run_name": run_name,
+        "output_dir": output_dir,
+        "landmarks_csv": landmarks_csv,
+        "analysis_csv": analysis_csv,
+        "trajectory_csv": trajectory_csv,
+        "trajectory_png": trajectory_png,
+        "board_png": board_png,
+        "analysis_preview": analysis_preview,
+    }
+
+
+def run_calibration_flow(config_path=Path("adb_config.json"), calibration_path=Path("calibration.json")):
+    print("\n[캘리브레이션] 실제 연두색 물체를 던지는 영상으로 보정값을 생성합니다.")
+    video_path = capture_video(config_path)
+    args = default_runtime_args()
+    outputs = run_analysis(video_path, args, calibration={})
+
+    object_csv = outputs["output_dir"] / f"{outputs['run_name']}_object_trajectory.csv"
+    print("\n[캘리브레이션] 연두색 물체 궤적 추적 중...")
+    track_object(
+        video_path=video_path,
+        output_csv=object_csv,
+        mode="lime",
+    )
+
+    print("\n[캘리브레이션] 예측 궤적과 물체 궤적 비교 중...")
+    calibrate(
+        analysis_csv=outputs["analysis_csv"],
+        object_csv=object_csv,
+        output_json=calibration_path,
+        hand=args.hand,
+        board_distance=DEFAULTS["board_distance"],
+    )
+    print(f"\n[캘리브레이션 완료] 보정 파일: {calibration_path}")
+
+
+def run_game_flow(config_path=Path("adb_config.json"), calibration_path=Path("calibration.json")):
+    print("\n[게임] 무물체 가상 다트 실행")
+    calibration = load_calibration(calibration_path) if calibration_path.exists() else {}
+    if calibration:
+        print(f"[게임] 보정 파일 적용: {calibration_path}")
+    else:
+        print(f"[게임] 보정 파일 없음. 기본 파라미터로 실행합니다: {calibration_path}")
+
+    video_path = capture_video(config_path)
+    args = default_runtime_args()
+    run_analysis(video_path, args, calibration)
+
+
+def run_interactive_menu():
+    print("Virtual Dart Motion")
+    print("1. 캘리브레이션")
+    print("2. 시뮬레이션")
+    print("0. 종료")
+    choice = input("번호를 입력하세요: ").strip()
+
+    if choice == "1":
+        run_calibration_flow()
+        return 0
+    if choice == "2":
+        run_game_flow()
+        return 0
+    if choice == "0":
+        print("종료합니다.")
+        return 0
+
+    print("잘못된 입력입니다. 1, 2, 0 중 하나를 입력하세요.", file=sys.stderr)
+    return 1
+
 
 def main():
+    if len(sys.argv) == 1:
+        try:
+            return run_interactive_menu()
+        except AdbCaptureError as exc:
+            print(f"[ADB 오류] {exc}", file=sys.stderr)
+            return 1
+
     args = parse_args()
 
     try:
