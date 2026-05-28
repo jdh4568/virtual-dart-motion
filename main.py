@@ -1,32 +1,167 @@
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from src.adb_capture import AdbCaptureError, capture_video
-from src.extract_landmarks import extract_pose
 from src.analyze_throw import analyze
-from src.trajectory import predict
-from src.simulate_board import read_hit_position, render_board
+from src.extract_landmarks import extract_pose
 from src.render_analysis_preview import render_preview
+from src.simulate_board import read_hit_position, render_board
+from src.trajectory import predict
 
 
-def run_analysis(video_path):
-    hand = "right"
-    flip_horizontal = False
+DEFAULTS = {
+    "hand": "right",
+    "motion_point": "auto",
+    "start_mode": "initial",
+    "start_window": 60,
+    "release_offset_frames": 0,
+    "board_distance": 2.0,
+    "gravity": 0.25,
+    "velocity_scale": 0.8,
+    "board_scale": 20.0,
+    "speed_to_mps": 2.5,
+    "min_duration": 0.25,
+    "max_duration": 1.2,
+}
 
-    output_dir = Path("output")
-    landmarks_csv = output_dir / "landmarks.csv"   
-    pose_preview = output_dir / "pose_preview.mp4"
-    analysis_csv = output_dir / "throw_analysis.csv"
-    trajectory_csv = output_dir / "trajectory.csv"
-    trajectory_png = output_dir / "trajectory.png"
-    board_png = output_dir / "board_result.png"
-    analysis_preview = output_dir / "analysis_preview.mp4"
+
+def find_latest_video(videos_dir):
+    videos = []
+    for pattern in ["*.mp4", "*.MP4", "*.mov", "*.MOV"]:
+        videos.extend(videos_dir.glob(pattern))
+
+    if not videos:
+        raise FileNotFoundError(f"No video file found in {videos_dir}")
+
+    return max(videos, key=lambda path: path.stat().st_mtime)
+
+
+def build_run_name(video_path, flip_horizontal):
+    run_name = video_path.stem
+    if flip_horizontal:
+        run_name = f"{run_name}_flipped"
+    return run_name
+
+
+def load_calibration(path):
+    if not path:
+        return {}
+
+    calibration_path = Path(path)
+    if not calibration_path.exists():
+        raise FileNotFoundError(f"Calibration file not found: {calibration_path}")
+
+    with calibration_path.open("r", encoding="utf-8") as calibration_file:
+        calibration = json.load(calibration_file)
+
+    if not isinstance(calibration, dict):
+        raise ValueError(f"Calibration file must contain a JSON object: {calibration_path}")
+
+    return calibration
+
+
+def choose_value(name, cli_value, calibration):
+    if cli_value is not None:
+        return cli_value
+    if name in calibration:
+        return calibration[name]
+    return DEFAULTS[name]
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run virtual dart motion analysis.")
+    parser.add_argument(
+        "input_video",
+        nargs="?",
+        type=Path,
+        help="Input video path. If omitted, the latest video in videos/ is used.",
+    )
+    parser.add_argument(
+        "--video",
+        type=Path,
+        help="Input video path. Used unless --adb-capture is set.",
+    )
+    parser.add_argument(
+        "--adb-capture",
+        action="store_true",
+        help="Record a new video over ADB, pull it into videos/, then analyze it.",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("adb_config.json"),
+        help="ADB capture config path.",
+    )
+    parser.add_argument(
+        "--calibration",
+        type=Path,
+        help="Calibration JSON created by src/calibrate_trajectory.py.",
+    )
+    parser.add_argument("--hand", choices=["right", "left"], default=DEFAULTS["hand"])
+    parser.add_argument(
+        "--motion-point",
+        choices=["auto", "wrist", "thumb_tip", "index_tip", "middle_tip"],
+        default=DEFAULTS["motion_point"],
+    )
+    parser.add_argument("--flip-horizontal", action="store_true")
+    parser.add_argument("--start-mode", choices=["initial", "lookback"], default=DEFAULTS["start_mode"])
+    parser.add_argument("--start-window", type=int, default=None)
+    parser.add_argument("--release-offset-frames", type=int, default=None)
+    parser.add_argument("--board-distance", type=float, default=None)
+    parser.add_argument("--gravity", type=float, default=None)
+    parser.add_argument("--velocity-scale", type=float, default=None)
+    parser.add_argument("--board-scale", type=float, default=None)
+    parser.add_argument("--speed-to-mps", type=float, default=None)
+    return parser.parse_args()
+
+
+def run_analysis(video_path, args, calibration):
+    hand = args.hand
+    motion_point = args.motion_point
+    flip_horizontal = args.flip_horizontal
+    start_mode = args.start_mode
+    start_window = int(choose_value("start_window", args.start_window, calibration))
+    release_offset_frames = int(
+        choose_value("release_offset_frames", args.release_offset_frames, calibration)
+    )
+    board_distance = float(choose_value("board_distance", args.board_distance, calibration))
+    gravity = float(choose_value("gravity", args.gravity, calibration))
+    velocity_scale = float(choose_value("velocity_scale", args.velocity_scale, calibration))
+    board_scale = float(choose_value("board_scale", args.board_scale, calibration))
+    speed_to_mps = float(choose_value("speed_to_mps", args.speed_to_mps, calibration))
+
+
+    run_name = build_run_name(video_path, flip_horizontal)
+    output_dir = Path("output") / run_name
+    landmarks_csv = output_dir / f"{run_name}_landmarks.csv"
+    pose_preview = output_dir / f"{run_name}_pose_preview.mp4"
+    analysis_csv = output_dir / f"{run_name}_analysis.csv"
+    trajectory_csv = output_dir / f"{run_name}_trajectory.csv"
+    trajectory_png = output_dir / f"{run_name}_trajectory.png"
+    board_png = output_dir / f"{run_name}_board.png"
+    analysis_preview = output_dir / f"{run_name}_analysis_preview.mp4"
 
     board_w = 16
     board_h = 16
 
-    print("1. 관절 좌표 추출 중...")
+    print("실행 설정")
+    print(f"Video: {video_path}")
+    print(f"Hand: {hand}")
+    print(f"Motion point: {motion_point}")
+    print(f"Start mode: {start_mode}")
+    print(f"Start window: {start_window} frames")
+    print(f"Release offset frames: {release_offset_frames}")
+    print(f"Flip horizontal: {flip_horizontal}")
+    print(f"Board distance: {board_distance}m")
+    print(f"Velocity scale: {velocity_scale}")
+    print(f"Gravity: {gravity}")
+    print(f"Board scale: {board_scale}")
+    print(f"Speed to m/s: {speed_to_mps}")
+    print(f"Output folder: {output_dir}")
+
+    print("\n1. 관절 및 손가락 좌표 추출 중...")
     extract_pose(
         video_path=video_path,
         output_csv=landmarks_csv,
@@ -38,9 +173,13 @@ def run_analysis(video_path):
     analyze(
         csv_path=landmarks_csv,
         hand=hand,
+        motion_point=motion_point,
         output_csv=analysis_csv,
         window=5,
         lookback=10,
+        start_mode=start_mode,
+        start_window=start_window,
+        release_offset_frames=release_offset_frames,
         direction_window=4,
         min_visibility=0.5,
         board_w=board_w,
@@ -54,13 +193,17 @@ def run_analysis(video_path):
         hand=hand,
         output_csv=trajectory_csv,
         plot_path=trajectory_png,
-        gravity=0.25,
+        gravity=gravity,
         duration=0.8,
         steps=30,
-        velocity_scale=0.8,
+        velocity_scale=velocity_scale,
         board_w=board_w,
         board_h=board_h,
-        board_scale=20.0,
+        board_scale=board_scale,
+        board_distance=board_distance,
+        speed_to_mps=speed_to_mps,
+        min_duration=DEFAULTS["min_duration"],
+        max_duration=DEFAULTS["max_duration"],
     )
 
     print("\n4. 가상 보드 결과 이미지 생성 중...")
@@ -86,36 +229,27 @@ def run_analysis(video_path):
     print("\n전체 실행 완료")
     print(f"명중 위치: ({hit_x}, {hit_y})")
     print(f"결과 폴더: {output_dir}")
+    print(f"좌표 CSV: {landmarks_csv}")
+    print(f"분석 CSV: {analysis_csv}")
+    print(f"궤적 이미지: {trajectory_png}")
+    print(f"분석 영상: {analysis_preview}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run virtual dart motion analysis.")
-    parser.add_argument(
-        "--video",
-        type=Path,
-        default=Path("videos/dart9.mp4"),
-        help="Input video path. Used unless --adb-capture is set.",
-    )
-    parser.add_argument(
-        "--adb-capture",
-        action="store_true",
-        help="Record a new video over ADB, pull it into videos/, then analyze it.",
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=Path("adb_config.json"),
-        help="ADB capture config path.",
-    )
-    args = parser.parse_args()
+    args = parse_args()
 
     try:
-        video_path = capture_video(args.config) if args.adb_capture else args.video
+        calibration = load_calibration(args.calibration)
+        if args.adb_capture:
+            video_path = capture_video(args.config)
+        else:
+            video_path = args.video or args.input_video or find_latest_video(Path("videos"))
+
+        run_analysis(video_path, args, calibration)
     except AdbCaptureError as exc:
         print(f"[ADB 오류] {exc}", file=sys.stderr)
         return 1
 
-    run_analysis(video_path)
     return 0
 
 

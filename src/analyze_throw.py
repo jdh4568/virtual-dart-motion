@@ -119,6 +119,31 @@ def find_release_candidate(df, speed_threshold_ratio=0.45):
     return release_idx, threshold
 
 
+def apply_release_offset(df, release_idx, release_offset_frames):
+    if release_offset_frames <= 0:
+        return release_idx
+
+    def valid_release_rows(rows):
+        rows = rows[rows["tracking_ok"] == True]
+        if "filtered_speed" in rows.columns:
+            rows = rows[rows["filtered_speed"].notna()]
+        return rows
+
+    release_pos = df.index.get_loc(release_idx)
+    target_pos = max(0, release_pos - release_offset_frames)
+    search = df.iloc[target_pos : release_pos + 1]
+    search = valid_release_rows(search)
+    if not search.empty:
+        return search.index[0]
+
+    search = df.iloc[: target_pos + 1]
+    search = valid_release_rows(search)
+    if not search.empty:
+        return search.index[-1]
+
+    return release_idx
+
+
 def direction_from_recent_motion(df, release_idx, hand, motion_point, direction_window):
     release_pos = df.index.get_loc(release_idx)
     start_pos = max(0, release_pos - direction_window)
@@ -218,6 +243,7 @@ def analyze(
     lookback,
     start_mode,
     start_window,
+    release_offset_frames,
     direction_window,
     min_visibility,
     board_w,
@@ -262,6 +288,7 @@ def analyze(
     df["elbow_angle"] = df.apply(lambda row: calculate_elbow_angle(row, hand), axis=1)
 
     release_idx, threshold = find_release_candidate(df)
+    release_idx = apply_release_offset(df, release_idx, release_offset_frames)
     release_row = df.loc[release_idx]
 
     start_idx = choose_start_index(
@@ -323,6 +350,7 @@ def analyze(
     df["throw_release_speed"] = release_row["filtered_speed"]
     df["throw_motion_point"] = motion_point
     df["throw_start_mode"] = start_mode
+    df["throw_release_offset_frames"] = release_offset_frames
     df["throw_release_x"] = release_x
     df["throw_release_y"] = release_y
     df["throw_start_x"] = start_x
@@ -337,6 +365,7 @@ def analyze(
     print(f"Hand: {hand}")
     print(f"Motion point: {motion_point}")
     print(f"Start mode: {start_mode}")
+    print(f"Release offset frames: {release_offset_frames}")
     print(f"Start frame: {int(start_row['frame_index'])} ({start_row['time_sec']:.4f}s)")
     print(f"Release candidate frame: {int(release_row['frame_index'])} ({release_row['time_sec']:.4f}s)")
     print(f"Release speed threshold: {threshold:.4f}")
@@ -405,6 +434,12 @@ def main():
         help="Initial frames searched for the start frame in initial mode",
     )
     parser.add_argument(
+        "--release-offset-frames",
+        type=int,
+        default=0,
+        help="Move the release frame earlier by this many frames",
+    )
+    parser.add_argument(
         "--direction-window",
         type=int,
         default=4,
@@ -435,6 +470,7 @@ def main():
         args.lookback,
         args.start_mode,
         args.start_window,
+        args.release_offset_frames,
         args.direction_window,
         args.min_visibility,
         args.board_w,
