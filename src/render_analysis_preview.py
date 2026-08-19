@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 
 import cv2
+import numpy as np
 import pandas as pd
 
 
@@ -24,7 +25,7 @@ def read_markers(analysis_csv):
     return df, start_rows.iloc[0], release_rows.iloc[0]
 
 
-def load_trajectory_points(trajectory_csv, width, height):
+def load_trajectory_points(trajectory_csv, width, height, y_offset_px=0):
     traj_df = pd.read_csv(trajectory_csv)
 
     points = []
@@ -37,7 +38,7 @@ def load_trajectory_points(trajectory_csv, width, height):
             continue
 
         px = int(x * width)
-        py = int(y * height)
+        py = int(y * height) - y_offset_px
 
         points.append((px, py))
 
@@ -148,6 +149,70 @@ def draw_animated_trajectory(frame, trajectory_points, release_frame, frame_inde
         draw_label(frame, "ENDPOINT", (current_point[0] + 12, current_point[1] - 12), (255, 0, 0))
 
 
+def draw_grid(frame, cell_size_px):
+    height, width = frame.shape[:2]
+
+    for x in range(0, width + 1, cell_size_px):
+        color = (210, 210, 210) if x % (cell_size_px * 5) else (170, 170, 170)
+        cv2.line(frame, (x, 0), (x, height), color, 1, cv2.LINE_AA)
+
+    for y in range(0, height + 1, cell_size_px):
+        color = (210, 210, 210) if y % (cell_size_px * 5) else (170, 170, 170)
+        cv2.line(frame, (0, y), (width, y), color, 1, cv2.LINE_AA)
+
+
+def draw_full_trajectory(frame, trajectory_points):
+    if not trajectory_points:
+        return
+
+    for i in range(1, len(trajectory_points)):
+        cv2.line(
+            frame,
+            trajectory_points[i - 1],
+            trajectory_points[i],
+            (0, 220, 255),
+            4,
+            cv2.LINE_AA,
+        )
+
+    release_point = trajectory_points[0]
+    endpoint = trajectory_points[-1]
+    cv2.circle(frame, release_point, 8, (0, 0, 255), -1)
+    cv2.circle(frame, release_point, 11, (255, 255, 255), 2)
+    draw_label(frame, "RELEASE", (release_point[0] + 12, release_point[1] - 12), (0, 0, 255))
+    cv2.circle(frame, endpoint, 8, (255, 0, 0), -1)
+    cv2.circle(frame, endpoint, 11, (255, 255, 255), 2)
+    draw_label(frame, "ENDPOINT", (endpoint[0] + 12, endpoint[1] - 12), (255, 0, 0))
+
+
+def render_grid_trajectory(
+    trajectory_csv,
+    output_image,
+    width=1920,
+    height=1080,
+    grid_size_px=30,
+    trajectory_y_offset_px=0,
+):
+    frame = np.full((height, width, 3), 255, dtype=np.uint8)
+    draw_grid(frame, grid_size_px)
+
+    trajectory_points = load_trajectory_points(
+        trajectory_csv,
+        width,
+        height,
+        y_offset_px=trajectory_y_offset_px,
+    )
+    draw_full_trajectory(frame, trajectory_points)
+
+    output_image.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(output_image), frame)
+
+    print(f"Grid trajectory image: {output_image}")
+    print(f"Canvas: {width}x{height}")
+    print(f"Grid size: {grid_size_px}px")
+    print(f"Trajectory points: {len(trajectory_points)}")
+
+
 def render_preview(
     video_path,
     analysis_csv,
@@ -155,6 +220,7 @@ def render_preview(
     output_video,
     hand,
     flip_horizontal=False,
+    trajectory_y_offset_px=0,
 ):
     df, start_row, release_row = read_markers(analysis_csv)
     frame_lookup = {int(row.frame_index): row for row in df.itertuples(index=False)}
@@ -171,7 +237,12 @@ def render_preview(
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
-    trajectory_points = load_trajectory_points(trajectory_csv, width, height)
+    trajectory_points = load_trajectory_points(
+        trajectory_csv,
+        width,
+        height,
+        y_offset_px=trajectory_y_offset_px,
+    )
 
     output_video.parent.mkdir(parents=True, exist_ok=True)
     writer = cv2.VideoWriter(
@@ -233,7 +304,65 @@ def render_preview(
     print(f"Start frame: {start_frame}")
     print(f"Release candidate frame: {release_frame}")
     print(f"Trajectory points: {len(trajectory_points)}")
+    print(f"Trajectory Y offset: {trajectory_y_offset_px}px")
     print(f"Preview saved: {output_video}")
+
+
+def render_release_frame_image(
+    video_path,
+    analysis_csv,
+    output_image,
+    hand="right",
+    flip_horizontal=False,
+):
+    _, start_row, release_row = read_markers(analysis_csv)
+    release_frame = int(release_row["frame_index"])
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise FileNotFoundError(f"Cannot open video: {video_path}")
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, release_frame)
+    ok, frame = cap.read()
+    cap.release()
+    if not ok:
+        raise ValueError(f"Cannot read release frame: {release_frame}")
+
+    if flip_horizontal:
+        frame = cv2.flip(frame, 1)
+
+    height, width = frame.shape[:2]
+    start_x, start_y = point_from_row(start_row, hand, "start")
+    release_x, release_y = point_from_row(release_row, hand, "release")
+
+    if not any(pd.isna(value) for value in [start_x, start_y, release_x, release_y]):
+        start_px = (int(start_x * width), int(start_y * height))
+        release_px = (int(release_x * width), int(release_y * height))
+        cv2.arrowedLine(
+            frame,
+            start_px,
+            release_px,
+            (0, 255, 255),
+            5,
+            cv2.LINE_AA,
+            tipLength=0.2,
+        )
+
+    draw_point_marker(frame, start_row, hand, "start", "START", (0, 255, 0))
+    draw_point_marker(frame, release_row, hand, "release", "RELEASE", (0, 0, 255))
+    draw_label(
+        frame,
+        f"release frame: {release_frame}",
+        (24, 42),
+        (0, 255, 255),
+    )
+
+    output_path = Path(output_image)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(output_path), frame)
+
+    print(f"Release frame image: {output_path}")
+    print(f"Release candidate frame: {release_frame}")
 
 
 def main():
@@ -260,6 +389,12 @@ def main():
         action="store_true",
         help="Flip mirrored/selfie videos before drawing markers",
     )
+    parser.add_argument(
+        "--trajectory-y-offset-px",
+        type=int,
+        default=0,
+        help="Move the rendered trajectory upward by this many pixels.",
+    )
 
     args = parser.parse_args()
 
@@ -270,6 +405,7 @@ def main():
         output_video=args.out,
         hand=args.hand,
         flip_horizontal=args.flip_horizontal,
+        trajectory_y_offset_px=args.trajectory_y_offset_px,
     )
 
 

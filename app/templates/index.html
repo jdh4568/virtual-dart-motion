@@ -1,0 +1,1897 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Virtual Dart Motion</title>
+  <link rel="stylesheet" href="/static/style.css">
+
+  <style>
+    .cross-board {
+      position: relative;
+    }
+
+    #endpointMarker {
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #ff3030;
+      border: 2px solid #ffffff;
+      box-shadow:
+        0 0 10px #ff3030,
+        0 0 20px #ff3030,
+        0 0 34px rgba(255, 48, 48, 0.8);
+      transform: translate(-50%, -50%);
+      z-index: 20;
+      display: none;
+      pointer-events: none;
+    }
+
+    #endpointMarker::after {
+      content: "endpoint";
+      position: absolute;
+      left: 24px;
+      top: -10px;
+      color: #ff5555;
+      font-size: 13px;
+      font-weight: bold;
+      white-space: nowrap;
+      text-shadow:
+        0 0 6px rgba(255, 48, 48, 0.8);
+    }
+
+    .settings-button {
+      position: fixed;
+      top: 20px;
+      right: 24px;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 1px solid #1f2a44;
+      background: rgba(17, 24, 39, 0.95);
+      color: #7ec8ff;
+      font-size: 22px;
+      cursor: pointer;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow:
+        0 0 14px rgba(78, 161, 255, 0.35);
+    }
+
+    .settings-button:hover {
+      background: rgba(31, 124, 255, 0.25);
+      box-shadow:
+        0 0 18px rgba(78, 161, 255, 0.65);
+    }
+
+    .preview-button {
+      position: fixed;
+      top: 20px;
+      right: 78px;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 1px solid #1f2a44;
+      background: rgba(17, 24, 39, 0.95);
+      color: #7ec8ff;
+      font-size: 18px;
+      cursor: pointer;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 14px rgba(78, 161, 255, 0.35);
+    }
+
+    .preview-button:hover {
+      background: rgba(31, 124, 255, 0.25);
+      box-shadow: 0 0 18px rgba(78, 161, 255, 0.65);
+    }
+
+    .settings-modal,
+    .preview-modal,
+    .message-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+    }
+
+    .settings-modal.hidden,
+    .preview-modal.hidden,
+    .message-modal.hidden {
+      display: none;
+    }
+
+    .preview-modal {
+      z-index: 2000;
+    }
+
+    .message-modal {
+      z-index: 4000;
+    }
+
+    .preview-panel {
+      width: min(1100px, calc(100vw - 48px));
+      padding: 18px;
+      border-radius: 18px;
+      background: #0a101d;
+      border: 1px solid #1f2a44;
+      box-shadow: 0 0 32px rgba(0, 140, 255, 0.32);
+      position: relative;
+    }
+
+    .preview-panel h2 {
+      margin: 0 50px 14px 0;
+      color: #7ec8ff;
+    }
+
+    .preview-stream {
+      display: block;
+      width: 100%;
+      max-height: calc(100vh - 190px);
+      aspect-ratio: 16 / 9;
+      object-fit: contain;
+      border-radius: 10px;
+      background: #02040b;
+      border: 1px solid #1f2a44;
+    }
+
+    .message-panel {
+      width: min(460px, calc(100vw - 48px));
+      padding: 28px;
+      border-radius: 18px;
+      background: #0a101d;
+      border: 2px solid #ff5555;
+      box-shadow: 0 0 34px rgba(255, 68, 68, 0.45);
+      text-align: center;
+    }
+
+    .message-panel h2 {
+      margin: 0 0 12px;
+      color: #ff6666;
+      font-size: 26px;
+    }
+
+    .message-panel p {
+      margin: 0 0 18px;
+      color: #f3f4f6;
+      line-height: 1.55;
+      white-space: pre-line;
+      max-height: 50vh;
+      overflow-y: auto;
+      word-break: break-word;
+    }
+
+    .analysis-progress {
+      margin-top: auto;
+      min-height: 64px;
+      box-sizing: border-box;
+      padding: 12px 14px;
+      visibility: visible;
+      opacity: 1;
+      transition: opacity 0.2s ease;
+      border-radius: 10px;
+      background: rgba(17, 24, 39, 0.9);
+      border: 1px solid #1f2a44;
+    }
+
+    .analysis-progress.hidden {
+      visibility: hidden;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      color: #9ecfff;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 12px;
+      overflow: hidden;
+      border-radius: 6px;
+      background: #02040b;
+      border: 1px solid #1f2a44;
+    }
+
+    .progress-fill {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #1f7cff, #00e5ff);
+      box-shadow: 0 0 14px rgba(0, 229, 255, 0.65);
+      transition: width 0.5s ease;
+    }
+
+    .settings-panel {
+      width: 360px;
+      background:
+        linear-gradient(
+          180deg,
+          #0d1628,
+          #0a101d
+        );
+      border: 1px solid #1f2a44;
+      border-radius: 18px;
+      padding: 22px;
+      box-shadow:
+        0 0 28px rgba(0, 140, 255, 0.28);
+      position: relative;
+    }
+
+    .settings-panel h2 {
+      margin-top: 0;
+      margin-bottom: 10px;
+      color: #7ec8ff;
+      font-size: 22px;
+    }
+
+    .settings-panel p {
+      margin-top: 0;
+      margin-bottom: 16px;
+      color: #9ca3af;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .settings-panel label {
+      display: block;
+      margin-top: 12px;
+      margin-bottom: 6px;
+      color: #9ecfff;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    .settings-panel input {
+      width: 100%;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid #1f2a44;
+      background: #111827;
+      color: white;
+      box-sizing: border-box;
+      font-size: 14px;
+      outline: none;
+    }
+
+    .settings-panel input:focus {
+      border-color: #4ea1ff;
+      box-shadow:
+        0 0 10px rgba(78, 161, 255, 0.35);
+    }
+
+    .settings-close-button {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      border: none;
+      background: #ef4444;
+      color: white;
+      font-size: 20px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .settings-close-button:hover {
+      box-shadow:
+        0 0 14px rgba(255, 70, 70, 0.6);
+    }
+
+    .settings-save-button {
+      margin-top: 18px;
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      border: none;
+      background:
+        linear-gradient(
+          180deg,
+          #1f7cff,
+          #1263d6
+        );
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .settings-save-button:hover {
+      box-shadow:
+        0 0 18px rgba(0, 132, 255, 0.45);
+    }
+
+    .brand-logo-box {
+      margin-top: auto;
+      padding: 12px;
+      border-radius: 16px;
+      background:
+        radial-gradient(
+          circle at 50% 42%,
+          rgba(48, 217, 219, 0.13),
+          rgba(17, 24, 39, 0.92) 54%,
+          rgba(2, 4, 11, 0.86) 100%
+        );
+      border: 1px solid rgba(126, 200, 255, 0.16);
+      box-shadow:
+        0 0 16px rgba(0, 140, 255, 0.14),
+        inset 0 0 28px rgba(78, 161, 255, 0.06);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .brand-logo-frame {
+      width: min(100%, 204px);
+      height: 184px;
+      border-radius: 20px;
+      border: 2px solid rgba(190, 231, 255, 0.72);
+      background: #ffffff;
+      box-shadow:
+        0 10px 28px rgba(0, 0, 0, 0.38),
+        0 0 18px rgba(78, 161, 255, 0.32);
+      overflow: hidden;
+    }
+
+    .brand-logo {
+      width: 100%;
+      height: auto;
+      display: block;
+      transform: translateY(-10px);
+    }
+
+    .preview-box {
+      margin-top: 18px;
+      padding: 14px;
+      border-radius: 14px;
+      background: rgba(17, 24, 39, 0.9);
+      border: 1px solid rgba(255,255,255,0.06);
+      box-shadow:
+        0 0 14px rgba(0, 140, 255, 0.10);
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .preview-box h3 {
+      margin: 0 0 10px 0;
+      color: #9ecfff;
+      font-size: 15px;
+    }
+
+    .preview-video {
+      width: 100%;
+      max-height: 260px;
+      border-radius: 12px;
+      background: #02040b;
+      border: 1px solid #1f2a44;
+      display: none;
+      object-fit: contain;
+    }
+
+    .preview-placeholder {
+      flex: 1;
+      min-height: 150px;
+      border-radius: 12px;
+      border: 1px dashed #1f2a44;
+      color: #9ca3af;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 13px;
+      line-height: 1.4;
+      padding: 12px;
+      box-sizing: border-box;
+      background: rgba(2, 4, 11, 0.45);
+    }
+
+    .preview-caption {
+      margin-top: 10px;
+      color: #9ca3af;
+      font-size: 12px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .hidden-status {
+      display: none;
+    }
+
+    .throw-result-popup {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%) scale(0.9);
+      z-index: 3000;
+      min-width: 360px;
+      padding: 34px 54px;
+      border-radius: 26px;
+      display: none;
+      pointer-events: none;
+      text-align: center;
+      font-weight: bold;
+      letter-spacing: 2px;
+      opacity: 0;
+      backdrop-filter: blur(8px);
+    }
+
+    .throw-result-popup.show {
+      display: block;
+      animation:
+        throwPopupIn 0.25s ease-out forwards,
+        throwPopupOut 0.45s ease-in forwards 4.55s;
+    }
+
+    .throw-result-popup.hit {
+      color: #00ff99;
+      background: rgba(0, 255, 153, 0.12);
+      border: 2px solid #00ff99;
+      box-shadow:
+        0 0 24px rgba(0, 255, 153, 0.95),
+        0 0 60px rgba(0, 255, 153, 0.55),
+        inset 0 0 26px rgba(0, 255, 153, 0.18);
+    }
+
+    .throw-result-popup.miss {
+      color: #ff4444;
+      background: rgba(255, 68, 68, 0.12);
+      border: 2px solid #ff4444;
+      box-shadow:
+        0 0 24px rgba(255, 68, 68, 0.95),
+        0 0 60px rgba(255, 68, 68, 0.55),
+        inset 0 0 26px rgba(255, 68, 68, 0.18);
+    }
+
+    .throw-result-main {
+      font-size: 72px;
+      line-height: 1;
+      margin-bottom: 14px;
+      text-shadow:
+        0 0 18px currentColor;
+    }
+
+    .throw-result-sub {
+      font-size: 26px;
+      line-height: 1.2;
+      opacity: 0.95;
+    }
+
+    @keyframes throwPopupIn {
+      0% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.82);
+      }
+
+      100% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+      }
+    }
+
+    @keyframes throwPopupOut {
+      0% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+      }
+
+      100% {
+        opacity: 0;
+        transform: translate(-50%, -58%) scale(0.96);
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+<button
+  id="previewButton"
+  class="preview-button"
+  type="button"
+  title="Latest Throw Video">
+  ▶
+</button>
+
+<button
+  id="settingsButton"
+  class="settings-button"
+  type="button"
+  title="Calibration Settings">
+  ⚙
+</button>
+
+<div
+  id="previewModal"
+  class="preview-modal hidden">
+
+  <div class="preview-panel">
+
+    <button
+      id="closePreviewButton"
+      class="settings-close-button"
+      type="button">
+      ×
+    </button>
+
+    <h2>Latest Throw Trajectory</h2>
+
+    <img
+      id="previewStream"
+      class="preview-stream"
+      alt="Latest throw trajectory preview">
+
+    <div
+      id="popupPreviewCaption"
+      class="preview-caption">
+      NO PREVIEW
+    </div>
+
+  </div>
+
+</div>
+
+<div
+  id="messageModal"
+  class="message-modal hidden">
+
+  <div class="message-panel">
+    <h2 id="messageTitle">ERROR</h2>
+    <p id="messageText"></p>
+    <button
+      id="closeMessageButton"
+      type="button">
+      확인
+    </button>
+  </div>
+
+</div>
+
+<div
+  id="throwResultPopup"
+  class="throw-result-popup">
+
+  <div
+    id="throwResultMain"
+    class="throw-result-main">
+  </div>
+
+  <div
+    id="throwResultSub"
+    class="throw-result-sub">
+  </div>
+
+</div>
+
+<div
+  id="settingsModal"
+  class="settings-modal hidden">
+
+  <div class="settings-panel">
+
+    <button
+      id="closeSettingsButton"
+      class="settings-close-button"
+      type="button">
+      ×
+    </button>
+
+    <h2>Calibration Settings</h2>
+
+    <p>
+      START ANALYSIS 실행 시 아래 보정값이 함께 전달됩니다.
+    </p>
+
+    <label for="dartSpeedMps">
+      Dart Speed m/s
+    </label>
+
+    <input
+      type="number"
+      id="dartSpeedMps"
+      value="10"
+      step="0.1"
+      placeholder="DART SPEED MPS">
+
+    <label for="trajectoryYOffsetPx">
+      Trajectory Y Offset px
+    </label>
+
+    <input
+      type="number"
+      id="trajectoryYOffsetPx"
+      value="0"
+      step="1"
+      placeholder="TRAJECTORY Y OFFSET PX">
+
+    <label for="frontHorizontalGain">
+      Front Horizontal Gain
+    </label>
+
+    <input
+      type="number"
+      id="frontHorizontalGain"
+      value="0.4"
+      step="0.1"
+      placeholder="FRONT HORIZONTAL GAIN">
+
+    <button
+      id="saveSettingsButton"
+      class="settings-save-button"
+      type="button">
+      SAVE SETTINGS
+    </button>
+
+  </div>
+
+</div>
+
+<div class="container">
+
+  <div class="header">
+    <h1>Virtual Dart Motion</h1>
+    <p>AI Motion Based Dart Game</p>
+  </div>
+
+  <div class="dashboard">
+
+    <!-- LEFT -->
+    <div>
+      <div class="panel">
+
+        <h2>System Status</h2>
+
+        <input
+          type="text"
+          id="player1Name"
+          placeholder="PLAYER 1 NAME">
+
+        <input
+          type="text"
+          id="player2Name"
+          placeholder="PLAYER 2 NAME">
+
+        <div class="upload-box">
+          <form id="uploadForm">
+            <button
+              type="submit"
+              id="startButton">
+              START ANALYSIS
+            </button>
+          </form>
+
+          <div id="loading"></div>
+        </div>
+
+        <button
+          class="reset-button"
+          onclick="resetGame()">
+          RESET GAME
+        </button>
+
+        <div
+          class="brand-logo-box"
+          aria-label="Airshot logo">
+          <div class="brand-logo-frame">
+            <img
+              class="brand-logo"
+              src="/static/images/airshot-logo.png"
+              alt="Airshot Motion is Your Aim IoT Dart Simulation">
+          </div>
+        </div>
+
+        <div class="hidden-status">
+          <p id="statusText">READY</p>
+          <p id="videoText">WAITING</p>
+          <p id="hitText">NO DATA</p>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- CENTER -->
+    <div>
+      <div class="panel">
+
+        <h2>Smart Target Board</h2>
+
+        <div
+          class="cross-board"
+          id="crossBoard">
+
+          <div
+            id="target-top"
+            class="target-circle">
+            TOP
+          </div>
+
+          <div class="middle-row">
+
+            <div
+              id="target-left"
+              class="target-circle">
+              LEFT
+            </div>
+
+            <div
+              id="target-center"
+              class="target-circle center">
+              CENTER
+            </div>
+
+            <div
+              id="target-right"
+              class="target-circle">
+              RIGHT
+            </div>
+
+          </div>
+
+          <div
+            id="target-bottom"
+            class="target-circle">
+            BOTTOM
+          </div>
+
+          <div id="endpointMarker"></div>
+
+        </div>
+
+        <div
+          id="analysisProgress"
+          class="analysis-progress hidden">
+          <div class="progress-header">
+            <span id="progressStage">분석 준비 중</span>
+            <span id="progressText">0% / 예상 남은 시간 계산 중</span>
+          </div>
+          <div class="progress-track">
+            <div
+              id="progressFill"
+              class="progress-fill">
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- RIGHT -->
+    <div>
+      <div class="panel">
+
+        <h2>Game Status</h2>
+
+        <div class="player-box">
+          <p>현재 플레이어</p>
+          <h3
+            class="turn"
+            id="currentPlayerText">
+            PLAYER 1
+          </h3>
+        </div>
+
+        <div class="player-box">
+          <p>현재 ROUND</p>
+          <h3
+            class="turn"
+            id="roundText">
+            ROUND 1 / 3
+          </h3>
+        </div>
+
+        <div class="player-box">
+          <p>현재 점수</p>
+
+          <div class="score">
+            <div>
+              <span id="p1Label">P1</span> :
+              <span id="player1Score">0</span>
+            </div>
+
+            <div>
+              <span id="p2Label">P2</span> :
+              <span id="player2Score">0</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="player-box">
+          <p>WINNER</p>
+          <h3
+            class="turn"
+            id="winnerText">
+            -
+          </h3>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<script>
+
+let currentPlayer = 1;
+let currentRound = 1;
+const MAX_ROUND = 3;
+
+// Invisible coordinate space shared with pixel_targets.py.
+const VIRTUAL_BOARD_WIDTH = 1920;
+const VIRTUAL_BOARD_HEIGHT = 1080;
+
+let gameEnded = false;
+
+let throwResultPopupTimer = null;
+let latestPreviewRunName = null;
+let latestPreviewVideoName = null;
+let analysisProgressTimer = null;
+let analysisStartedAt = null;
+
+const ESTIMATED_ANALYSIS_SECONDS = 90;
+
+let playerScores = {
+  1: 0,
+  2: 0
+};
+
+function clearTargetHighlight() {
+
+  document
+    .querySelectorAll(".target-circle")
+    .forEach(target => {
+      target.classList.remove("active");
+    });
+
+}
+
+function clearEndpointMarker() {
+
+  const marker =
+    document.getElementById("endpointMarker");
+
+  marker.style.display = "none";
+
+}
+
+function progressStageFromPercent(percent) {
+
+  if (percent < 18) {
+    return "카메라 영상 준비 중";
+  }
+
+  if (percent < 48) {
+    return "자세 및 손가락 좌표 분석 중";
+  }
+
+  if (percent < 72) {
+    return "릴리즈와 궤적 계산 중";
+  }
+
+  if (percent < 92) {
+    return "과녁 판정 및 영상 생성 중";
+  }
+
+  return "결과 정리 중";
+
+}
+
+function updateAnalysisProgress(percent, remainingSeconds) {
+
+  const normalizedPercent =
+    Math.max(0, Math.min(100, Math.round(percent)));
+
+  document.getElementById("progressFill").style.width =
+    `${normalizedPercent}%`;
+
+  document.getElementById("progressStage").innerText =
+    progressStageFromPercent(normalizedPercent);
+
+  const remainingText =
+    normalizedPercent >= 100
+      ? "완료"
+      : `예상 ${Math.max(0, Math.ceil(remainingSeconds))}초 남음`;
+
+  document.getElementById("progressText").innerText =
+    `${normalizedPercent}% / ${remainingText}`;
+
+}
+
+function startAnalysisProgress() {
+
+  if (analysisProgressTimer) {
+    clearInterval(analysisProgressTimer);
+  }
+
+  analysisStartedAt = Date.now();
+
+  document
+    .getElementById("analysisProgress")
+    .classList
+    .remove("hidden");
+
+  updateAnalysisProgress(1, ESTIMATED_ANALYSIS_SECONDS);
+
+  analysisProgressTimer =
+    setInterval(() => {
+
+      const elapsedSeconds =
+        (Date.now() - analysisStartedAt) / 1000;
+
+      const ratio =
+        Math.min(
+          0.95,
+          elapsedSeconds / ESTIMATED_ANALYSIS_SECONDS
+        );
+
+      updateAnalysisProgress(
+        ratio * 100,
+        ESTIMATED_ANALYSIS_SECONDS - elapsedSeconds
+      );
+
+    }, 1000);
+
+}
+
+function finishAnalysisProgress(success = true) {
+
+  if (analysisProgressTimer) {
+    clearInterval(analysisProgressTimer);
+    analysisProgressTimer = null;
+  }
+
+  if (success) {
+    updateAnalysisProgress(100, 0);
+  }
+
+  setTimeout(() => {
+    document
+      .getElementById("analysisProgress")
+      .classList
+      .add("hidden");
+  }, success ? 1800 : 0);
+
+}
+
+function clearThrowResultPopup() {
+
+  if (throwResultPopupTimer) {
+    clearTimeout(throwResultPopupTimer);
+    throwResultPopupTimer = null;
+  }
+
+  const popup =
+    document.getElementById("throwResultPopup");
+
+  popup.classList.remove(
+    "show",
+    "hit",
+    "miss"
+  );
+
+  popup.style.display =
+    "none";
+
+  document.getElementById("throwResultMain").innerText =
+    "";
+
+  document.getElementById("throwResultSub").innerText =
+    "";
+
+}
+
+function showThrowResultPopup(hit, target) {
+
+  clearThrowResultPopup();
+
+  const popup =
+    document.getElementById("throwResultPopup");
+
+  const mainText =
+    document.getElementById("throwResultMain");
+
+  const subText =
+    document.getElementById("throwResultSub");
+
+  const normalizedTarget =
+    target
+      ? String(target).toUpperCase()
+      : "UNKNOWN";
+
+  if (hit) {
+
+    popup.classList.add("hit");
+
+    mainText.innerText =
+      "HIT";
+
+    subText.innerText =
+      normalizedTarget;
+
+  }
+  else {
+
+    popup.classList.add("miss");
+
+    mainText.innerText =
+      "MISS";
+
+    subText.innerText =
+      `NEAREST : ${normalizedTarget}`;
+
+  }
+
+  popup.style.display =
+    "block";
+
+  void popup.offsetWidth;
+
+  popup.classList.add("show");
+
+  throwResultPopupTimer =
+    setTimeout(() => {
+      clearThrowResultPopup();
+    }, 5000);
+
+}
+
+function evaluateWebTarget(endpointXPx, endpointYPx) {
+
+  if (
+    endpointXPx === undefined ||
+    endpointYPx === undefined ||
+    endpointXPx === null ||
+    endpointYPx === null ||
+    endpointXPx === "" ||
+    endpointYPx === ""
+  ) {
+    return { target: "center", distancePx: null, hit: false };
+  }
+
+  const endpointX = Number(endpointXPx);
+  const endpointY = Number(endpointYPx);
+
+  if (!Number.isFinite(endpointX) || !Number.isFinite(endpointY)) {
+    return { target: "center", distancePx: null, hit: false };
+  }
+
+  const boardRect =
+    document.getElementById("crossBoard").getBoundingClientRect();
+
+  const webX = boardRect.left + Math.max(0, Math.min(1, endpointX / VIRTUAL_BOARD_WIDTH)) * boardRect.width;
+  const webY = boardRect.top + Math.max(0, Math.min(1, endpointY / VIRTUAL_BOARD_HEIGHT)) * boardRect.height;
+
+  let nearestTarget = "center";
+  let nearestDistance = Infinity;
+  let hitTarget = null;
+
+  document
+    .querySelectorAll(".target-circle")
+    .forEach(targetElement => {
+      const targetRect = targetElement.getBoundingClientRect();
+      const targetX = targetRect.left + targetRect.width / 2;
+      const targetY = targetRect.top + targetRect.height / 2;
+      const distance = Math.hypot(webX - targetX, webY - targetY);
+
+      if (distance < nearestDistance) {
+        nearestTarget = targetElement.id.replace("target-", "");
+        nearestDistance = distance;
+      }
+
+      if (
+        webX >= targetRect.left &&
+        webX <= targetRect.right &&
+        webY >= targetRect.top &&
+        webY <= targetRect.bottom
+      ) {
+        hitTarget = targetElement.id.replace("target-", "");
+      }
+    });
+
+  return {
+    target: hitTarget || nearestTarget,
+    distancePx: nearestDistance,
+    hit: hitTarget !== null
+  };
+
+}
+
+function showMessagePopup(title, message) {
+
+  document.getElementById("messageTitle").innerText =
+    title;
+
+  document.getElementById("messageText").innerText =
+    message;
+
+  document
+    .getElementById("messageModal")
+    .classList
+    .remove("hidden");
+
+}
+
+function closeMessagePopup() {
+
+  document
+    .getElementById("messageModal")
+    .classList
+    .add("hidden");
+
+}
+
+function activateTarget(target) {
+
+  clearTargetHighlight();
+
+  if (!target) {
+    return;
+  }
+
+  const normalizedTarget =
+    String(target).toLowerCase();
+
+  const selected =
+    document.getElementById(
+      `target-${normalizedTarget}`
+    );
+
+  if (selected) {
+    selected.classList.add("active");
+  }
+
+}
+
+function showEndpointMarker(endpointXPx, endpointYPx) {
+
+  if (
+    endpointXPx === undefined ||
+    endpointYPx === undefined ||
+    endpointXPx === null ||
+    endpointYPx === null
+  ) {
+    clearEndpointMarker();
+    return;
+  }
+
+  const board =
+    document.getElementById("crossBoard");
+
+  const marker =
+    document.getElementById("endpointMarker");
+
+  const boardRect =
+    board.getBoundingClientRect();
+
+  const xRatio =
+    Number(endpointXPx) / VIRTUAL_BOARD_WIDTH;
+
+  const yRatio =
+    Number(endpointYPx) / VIRTUAL_BOARD_HEIGHT;
+
+  const markerX =
+    Math.max(
+      0,
+      Math.min(
+        boardRect.width,
+        boardRect.width * xRatio
+      )
+    );
+
+  const markerY =
+    Math.max(
+      0,
+      Math.min(
+        boardRect.height,
+        boardRect.height * yRatio
+      )
+    );
+
+  marker.style.left =
+    `${markerX}px`;
+
+  marker.style.top =
+    `${markerY}px`;
+
+  marker.style.display =
+    "block";
+
+}
+
+function getTargetFromLegacyHit(hitX, hitY) {
+
+  if (hitX === undefined || hitY === undefined) {
+    return "center";
+  }
+
+  const x = Number(hitX);
+  const y = Number(hitY);
+
+  if (x <= 4) {
+    return "left";
+  }
+
+  if (x >= 11) {
+    return "right";
+  }
+
+  if (y <= 5) {
+    return "top";
+  }
+
+  if (y >= 10) {
+    return "bottom";
+  }
+
+  return "center";
+
+}
+
+function scoreFromTarget(target, hit) {
+
+  if (!hit) {
+    return 0;
+  }
+
+  const normalizedTarget =
+    String(target).toLowerCase();
+
+  if (normalizedTarget === "center") {
+    return 100;
+  }
+
+  if (
+    normalizedTarget === "top" ||
+    normalizedTarget === "left" ||
+    normalizedTarget === "right" ||
+    normalizedTarget === "bottom"
+  ) {
+    return 70;
+  }
+
+  return 0;
+
+}
+
+function showScorePopup(score) {
+
+  if (score <= 0) {
+    return;
+  }
+
+  const popup =
+    document.createElement("div");
+
+  popup.classList.add("score-popup");
+  popup.innerText = `+${score}`;
+
+  popup.style.left =
+    `${window.innerWidth / 2}px`;
+
+  popup.style.top =
+    `${window.innerHeight / 2}px`;
+
+  document.body.appendChild(popup);
+
+  setTimeout(() => {
+    popup.remove();
+  }, 1000);
+
+}
+
+function updateCurrentPlayerName() {
+
+  const p1 =
+    document.getElementById("player1Name")
+      .value
+      .trim();
+
+  const p2 =
+    document.getElementById("player2Name")
+      .value
+      .trim();
+
+  if (currentPlayer === 1) {
+    document.getElementById("currentPlayerText").innerText =
+      p1 || "PLAYER 1";
+  }
+  else {
+    document.getElementById("currentPlayerText").innerText =
+      p2 || "PLAYER 2";
+  }
+
+}
+
+function finishGame() {
+
+  gameEnded = true;
+
+  let winner = "DRAW";
+
+  if (playerScores[1] > playerScores[2]) {
+    winner =
+      document.getElementById("p1Label").innerText;
+  }
+  else if (playerScores[2] > playerScores[1]) {
+    winner =
+      document.getElementById("p2Label").innerText;
+  }
+
+  const winnerText =
+    document.getElementById("winnerText");
+
+  winnerText.innerText = winner;
+  winnerText.classList.add("game-over");
+
+  document.getElementById("statusText").innerText =
+    "GAME OVER";
+
+}
+
+function resetPreviewVideo() {
+
+  latestPreviewRunName = null;
+  latestPreviewVideoName = null;
+
+  document.getElementById("previewStream").removeAttribute("src");
+  document.getElementById("popupPreviewCaption").innerText =
+    "NO PREVIEW";
+
+  closePreviewModal();
+
+}
+
+function updatePreviewVideo(runName, videoName) {
+
+  latestPreviewRunName = runName || null;
+  latestPreviewVideoName = videoName || null;
+
+}
+
+function setPreviewLoading() {
+
+  closePreviewModal();
+
+}
+
+async function openPreviewModal() {
+
+  if (!latestPreviewRunName) {
+
+    try {
+
+      const response =
+        await fetch("/latest-result");
+
+      if (response.ok) {
+        const latestResult = await response.json();
+        updatePreviewVideo(
+          latestResult.run_name,
+          latestResult.video_name
+        );
+      }
+
+    }
+    catch (error) {
+      console.error(error);
+    }
+
+    if (!latestPreviewRunName) {
+      showMessagePopup(
+        "영상 없음",
+        "분석을 완료한 뒤 궤적 영상을 확인할 수 있습니다."
+      );
+      return;
+    }
+
+  }
+
+  const stream =
+    document.getElementById("previewStream");
+
+  stream.src =
+    `/preview/${encodeURIComponent(latestPreviewRunName)}?t=${Date.now()}`;
+
+  document.getElementById("popupPreviewCaption").innerText =
+    latestPreviewVideoName
+      ? `Preview: ${latestPreviewVideoName}`
+      : "Latest trajectory preview";
+
+  document
+    .getElementById("previewModal")
+    .classList
+    .remove("hidden");
+
+}
+
+function closePreviewModal() {
+
+  document
+    .getElementById("previewModal")
+    .classList
+    .add("hidden");
+
+  document.getElementById("previewStream").removeAttribute("src");
+
+}
+
+function resetGame() {
+
+  currentPlayer = 1;
+  currentRound = 1;
+  gameEnded = false;
+
+  playerScores = {
+    1: 0,
+    2: 0
+  };
+
+  document.getElementById("player1Score").innerText = 0;
+  document.getElementById("player2Score").innerText = 0;
+
+  document.getElementById("winnerText").innerText = "-";
+  document.getElementById("winnerText")
+    .classList.remove("game-over");
+
+  updateCurrentPlayerName();
+
+  document.getElementById("roundText").innerText =
+    "ROUND 1 / 3";
+
+  document.getElementById("statusText").innerText =
+    "READY";
+
+  document.getElementById("hitText").innerText =
+    "NO DATA";
+
+  document.getElementById("videoText").innerText =
+    "WAITING";
+
+  document.getElementById("loading").innerText =
+    "";
+
+  clearTargetHighlight();
+  clearEndpointMarker();
+  clearThrowResultPopup();
+  resetPreviewVideo();
+  finishAnalysisProgress(false);
+
+}
+
+function getCalibrationValues() {
+
+  const dartSpeedInput =
+    document.getElementById("dartSpeedMps");
+
+  const trajectoryYOffsetInput =
+    document.getElementById("trajectoryYOffsetPx");
+
+  const frontHorizontalGainInput =
+    document.getElementById("frontHorizontalGain");
+
+  const dartSpeedMps =
+    Number(dartSpeedInput.value);
+
+  const trajectoryYOffsetPx =
+    Number(trajectoryYOffsetInput.value);
+
+  const frontHorizontalGain =
+    Number(frontHorizontalGainInput.value);
+
+  return {
+    dart_speed_mps:
+      Number.isFinite(dartSpeedMps)
+        ? dartSpeedMps
+        : 10.0,
+
+    trajectory_y_offset_px:
+      Number.isFinite(trajectoryYOffsetPx)
+        ? trajectoryYOffsetPx
+        : 0,
+
+    front_horizontal_gain:
+      Number.isFinite(frontHorizontalGain)
+        ? frontHorizontalGain
+        : 0.4
+  };
+
+}
+
+function openSettingsModal() {
+
+  document
+    .getElementById("settingsModal")
+    .classList
+    .remove("hidden");
+
+}
+
+function closeSettingsModal() {
+
+  document
+    .getElementById("settingsModal")
+    .classList
+    .add("hidden");
+
+}
+
+document
+  .getElementById("settingsButton")
+  .addEventListener(
+    "click",
+    openSettingsModal
+  );
+
+document
+  .getElementById("previewButton")
+  .addEventListener(
+    "click",
+    openPreviewModal
+  );
+
+document
+  .getElementById("closePreviewButton")
+  .addEventListener(
+    "click",
+    closePreviewModal
+  );
+
+document
+  .getElementById("closeMessageButton")
+  .addEventListener(
+    "click",
+    closeMessagePopup
+  );
+
+document
+  .getElementById("closeSettingsButton")
+  .addEventListener(
+    "click",
+    closeSettingsModal
+  );
+
+document
+  .getElementById("saveSettingsButton")
+  .addEventListener(
+    "click",
+    closeSettingsModal
+  );
+
+document
+  .getElementById("settingsModal")
+  .addEventListener(
+    "click",
+    (event) => {
+      if (event.target.id === "settingsModal") {
+        closeSettingsModal();
+      }
+    }
+  );
+
+document
+  .getElementById("previewModal")
+  .addEventListener(
+    "click",
+    (event) => {
+      if (event.target.id === "previewModal") {
+        closePreviewModal();
+      }
+    }
+  );
+
+document
+  .getElementById("messageModal")
+  .addEventListener(
+    "click",
+    (event) => {
+      if (event.target.id === "messageModal") {
+        closeMessagePopup();
+      }
+    }
+  );
+
+document
+  .getElementById("player1Name")
+  .addEventListener(
+    "input",
+    updateCurrentPlayerName
+  );
+
+document
+  .getElementById("player2Name")
+  .addEventListener(
+    "input",
+    updateCurrentPlayerName
+  );
+
+const form =
+  document.getElementById("uploadForm");
+
+form.addEventListener("submit", async (e) => {
+
+  e.preventDefault();
+
+  if (gameEnded) {
+    showMessagePopup(
+      "게임 종료",
+      "게임이 종료되었습니다. RESET GAME을 눌러 다시 시작하세요."
+    );
+    return;
+  }
+
+  const startButton =
+    document.getElementById("startButton");
+
+  startButton.disabled = true;
+  startButton.innerText = "ANALYZING...";
+
+  clearTargetHighlight();
+  clearEndpointMarker();
+  clearThrowResultPopup();
+  setPreviewLoading();
+  startAnalysisProgress();
+
+  const p1 =
+    document.getElementById("player1Name").value.trim();
+
+  const p2 =
+    document.getElementById("player2Name").value.trim();
+
+  document.getElementById("p1Label").innerText =
+    p1 || "P1";
+
+  document.getElementById("p2Label").innerText =
+    p2 || "P2";
+
+  const calibrationValues =
+    getCalibrationValues();
+
+  document.getElementById("loading").innerText =
+    "DOUBLE CAMERA RECORDING...";
+
+  document.getElementById("statusText").innerText =
+    "CAPTURING SIDE / FRONT VIDEO";
+
+  document.getElementById("hitText").innerText =
+    "ANALYZING...";
+
+  try {
+
+    const response =
+      await fetch("/analyze", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(calibrationValues)
+      });
+
+    const data =
+      await response.json();
+
+    if (!data.success) {
+
+      finishAnalysisProgress(false);
+
+      document.getElementById("statusText").innerText =
+        "ERROR";
+
+      document.getElementById("loading").innerText =
+        "";
+
+      showMessagePopup(
+        "분석 오류",
+        data.error || "알 수 없는 오류가 발생했습니다."
+      );
+
+      startButton.disabled = false;
+      startButton.innerText = "START ANALYSIS";
+
+      return;
+
+    }
+
+    updatePreviewVideo(
+      data.run_name,
+      data.video_name
+    );
+
+    if (data.retry_required || data.trajectory_valid === false) {
+
+      finishAnalysisProgress(true);
+
+      clearTargetHighlight();
+      clearEndpointMarker();
+
+      document.getElementById("videoText").innerText =
+        data.video_name || "UNKNOWN VIDEO";
+
+      document.getElementById("statusText").innerText =
+        "RETAKE REQUIRED";
+
+      document.getElementById("hitText").innerText =
+        data.trajectory_quality_message
+        || "궤적이 정상적으로 형성되지 않았습니다. 다시 촬영하세요.";
+
+      document.getElementById("loading").innerText =
+        "";
+
+      showMessagePopup(
+        "재촬영 필요",
+        (
+          data.trajectory_quality_message
+          || "궤적이 정상적으로 형성되지 않았습니다."
+        )
+        + "\n점수와 턴은 유지됩니다. 다시 촬영하세요."
+      );
+
+      startButton.disabled = false;
+      startButton.innerText = "RETAKE";
+
+      return;
+
+    }
+
+    document.getElementById("loading").innerText =
+      "AI ANALYZING MOTION...";
+
+    document.getElementById("statusText").innerText =
+      "PROCESSING";
+
+    document.getElementById("videoText").innerText =
+      data.video_name || "UNKNOWN VIDEO";
+
+    clearTargetHighlight();
+
+    const webResult =
+      evaluateWebTarget(
+        data.endpoint_x_px,
+        data.endpoint_y_px
+      );
+
+    const target =
+      webResult.target;
+
+    showEndpointMarker(
+      data.endpoint_x_px,
+      data.endpoint_y_px
+    );
+
+    // HIT and nearest target follow the rendered web target rectangles.
+    const hit =
+      webResult.hit;
+
+    if (hit) {
+      activateTarget(target);
+    }
+    else {
+      clearTargetHighlight();
+    }
+
+    showThrowResultPopup(
+      hit,
+      target
+    );
+
+    const score =
+      scoreFromTarget(target, hit);
+
+    showScorePopup(score);
+
+    playerScores[currentPlayer] += score;
+
+    document.getElementById("player1Score").innerText =
+      playerScores[1];
+
+    document.getElementById("player2Score").innerText =
+      playerScores[2];
+
+    const endpointText =
+      (
+        data.endpoint_x_px !== undefined &&
+        data.endpoint_y_px !== undefined
+      )
+        ? ` / ENDPOINT : (${Number(data.endpoint_x_px).toFixed(1)}, ${Number(data.endpoint_y_px).toFixed(1)})`
+        : "";
+
+    const distanceText =
+      webResult.distancePx !== null
+        ? ` / DISTANCE : ${webResult.distancePx.toFixed(1)}px`
+        : "";
+
+    const calibrationText =
+      ` / SPEED : ${Number(calibrationValues.dart_speed_mps).toFixed(1)}`
+      + ` / Y-OFFSET : ${calibrationValues.trajectory_y_offset_px}`
+      + ` / FRONT-GAIN : ${Number(calibrationValues.front_horizontal_gain).toFixed(2)}`;
+
+    const resultPrefix =
+      hit
+        ? `HIT : ${String(target).toUpperCase()}`
+        : `MISS / NEAREST : ${String(target).toUpperCase()}`;
+
+    document.getElementById("hitText").innerText =
+      `${resultPrefix}${endpointText}${distanceText}${calibrationText}`;
+
+    document.getElementById("statusText").innerText =
+      hit
+        ? "BOARD UPDATED"
+        : "MISS";
+
+    document.getElementById("loading").innerText =
+      "";
+
+    finishAnalysisProgress(true);
+
+    if (currentPlayer === 1) {
+      currentPlayer = 2;
+    }
+    else {
+      currentPlayer = 1;
+      currentRound++;
+
+      document.getElementById("roundText").innerText =
+        `ROUND ${currentRound} / ${MAX_ROUND}`;
+    }
+
+    const currentPlayerText =
+      document.getElementById("currentPlayerText");
+
+    currentPlayerText.classList.remove("turn-active");
+
+    void currentPlayerText.offsetWidth;
+
+    currentPlayerText.classList.add("turn-active");
+
+    updateCurrentPlayerName();
+
+    if (currentRound > MAX_ROUND) {
+      finishGame();
+    }
+
+  }
+  catch (error) {
+
+    finishAnalysisProgress(false);
+
+    console.error(error);
+
+    document.getElementById("statusText").innerText =
+      "SERVER ERROR";
+
+    document.getElementById("loading").innerText =
+      "";
+
+    showMessagePopup(
+      "서버 오류",
+      error.message || "서버와 통신하는 중 오류가 발생했습니다."
+    );
+
+  }
+
+  startButton.disabled = false;
+  startButton.innerText = "START ANALYSIS";
+
+});
+
+</script>
+
+</body>
+</html>

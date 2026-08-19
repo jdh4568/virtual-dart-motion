@@ -25,6 +25,17 @@ HAND_POINTS = {
     "middle_tip": mp.solutions.hands.HandLandmark.MIDDLE_FINGER_TIP,
 }
 
+POSE_HAND_FALLBACK_POINTS = {
+    "right": {
+        "thumb_tip": mp.solutions.pose.PoseLandmark.RIGHT_THUMB,
+        "index_tip": mp.solutions.pose.PoseLandmark.RIGHT_INDEX,
+    },
+    "left": {
+        "thumb_tip": mp.solutions.pose.PoseLandmark.LEFT_THUMB,
+        "index_tip": mp.solutions.pose.PoseLandmark.LEFT_INDEX,
+    },
+}
+
 
 def video_writer_fps(fps):
     if not fps or fps <= 0:
@@ -94,10 +105,17 @@ def landmark_row(frame_index, time_sec, pose_landmarks, hand_sides):
         hand = hand_sides[side]
         for point_name, landmark_id in HAND_POINTS.items():
             column_name = f"{side}_{point_name}"
-            if hand is None:
-                empty_point(row, column_name)
+            if hand is not None:
+                write_point(row, column_name, hand.landmark[landmark_id.value])
                 continue
-            write_point(row, column_name, hand.landmark[landmark_id.value])
+
+            fallback_id = POSE_HAND_FALLBACK_POINTS.get(side, {}).get(point_name)
+            if pose_landmarks is not None and fallback_id is not None:
+                point = pose_landmarks[fallback_id.value]
+                write_point(row, column_name, point, point.visibility)
+                continue
+
+            empty_point(row, column_name)
 
     return row
 

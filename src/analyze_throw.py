@@ -6,6 +6,7 @@ import pandas as pd
 
 
 MOTION_POINTS = {"wrist", "thumb_tip", "index_tip", "middle_tip"}
+START_MODES = {"recent", "video-start"}
 
 
 def moving_average(values, window):
@@ -75,19 +76,25 @@ def filter_unreliable_motion(df, hand, motion_point, min_visibility):
         visibility_columns.append(point_visibility)
     available_visibility = [column for column in visibility_columns if column in df.columns]
 
-    if available_visibility:
+    point = point_prefix(hand, motion_point)
+    point_has_coordinates = df[f"{point}_x"].notna() & df[f"{point}_y"].notna()
+    base_tracking_ok = (df["pose_detected"] == True) & point_has_coordinates
+
+    if available_visibility and min_visibility > 0:
         df["tracking_ok"] = df["pose_detected"] == True
         for column in available_visibility:
             df["tracking_ok"] = df["tracking_ok"] & (df[column] >= min_visibility)
     else:
         df["tracking_ok"] = df["pose_detected"] == True
 
-    point = point_prefix(hand, motion_point)
-    df["tracking_ok"] = (
-        df["tracking_ok"]
-        & df[f"{point}_x"].notna()
-        & df[f"{point}_y"].notna()
-    )
+    df["tracking_ok"] = df["tracking_ok"] & point_has_coordinates
+
+    if df["tracking_ok"].sum() < 2 and base_tracking_ok.sum() >= 2:
+        print(
+            "[WARN] Visibility filter removed all usable motion points. "
+            "Falling back to coordinate-only tracking."
+        )
+        df["tracking_ok"] = base_tracking_ok
 
     speed_cap = df.loc[df["tracking_ok"], "speed"].quantile(0.98)
     if pd.isna(speed_cap) or speed_cap <= 0:
@@ -116,6 +123,21 @@ def find_release_candidate(df, speed_threshold_ratio=0.45):
     # This avoids selecting an earlier frame only because of centered smoothing.
     release_idx = candidates["filtered_speed"].idxmax()
     return release_idx, threshold
+
+
+def apply_release_offset(df, release_idx, release_offset_frames):
+    if release_offset_frames <= 0:
+        return release_idx
+
+    release_pos = df.index.get_loc(release_idx)
+    target_pos = max(0, release_pos - release_offset_frames)
+    candidates = df.iloc[: target_pos + 1]
+    candidates = candidates[candidates["tracking_ok"] == True]
+
+    if candidates.empty:
+        return df.index[target_pos]
+
+    return candidates.index[-1]
 
 
 def direction_from_recent_motion(df, release_idx, hand, motion_point, direction_window):
@@ -160,10 +182,29 @@ def calculate_hit_position(direction_x, direction_y, speed, board_w, board_h, se
     )
 
 
+def select_start_frame(df, release_idx, lookback, start_mode):
+    release_pos = df.index.get_loc(release_idx)
+
+    if start_mode == "video-start":
+        candidates = df.iloc[: release_pos + 1]
+        candidates = candidates[candidates["tracking_ok"] == True]
+        if not candidates.empty:
+            return candidates.index[0]
+        return df.index[0]
+
+    start_pos = max(0, release_pos - lookback)
+    candidates = df.iloc[start_pos : release_pos + 1]
+    candidates = candidates[candidates["tracking_ok"] == True]
+    if len(candidates) >= 2:
+        return candidates.index[0]
+    return df.index[start_pos]
+
+
 def analyze(
     csv_path,
     hand,
     motion_point,
+    start_mode,
     output_csv,
     window,
     lookback,
@@ -172,6 +213,7 @@ def analyze(
     board_w,
     board_h,
     sensitivity,
+    release_offset_frames=0,
 ):
     df = pd.read_csv(csv_path)
     hand = hand.lower()
@@ -179,6 +221,8 @@ def analyze(
         raise ValueError("--hand must be either right or left")
     if motion_point not in MOTION_POINTS | {"auto"}:
         raise ValueError(f"--motion-point must be one of: auto, {sorted(MOTION_POINTS)}")
+    if start_mode not in START_MODES:
+        raise ValueError(f"--start-mode must be one of: {sorted(START_MODES)}")
 
     required = [
         "frame_index",
@@ -208,17 +252,11 @@ def analyze(
     df["smooth_speed"] = moving_average(df["filtered_speed"].fillna(0), window)
     df["elbow_angle"] = df.apply(lambda row: calculate_elbow_angle(row, hand), axis=1)
 
-    release_idx, threshold = find_release_candidate(df)
+    detected_release_idx, threshold = find_release_candidate(df)
+    release_idx = apply_release_offset(df, detected_release_idx, release_offset_frames)
     release_row = df.loc[release_idx]
 
-    release_pos = df.index.get_loc(release_idx)
-    start_pos = max(0, release_pos - lookback)
-    start_candidates = df.iloc[start_pos : release_pos + 1]
-    start_candidates = start_candidates[start_candidates["tracking_ok"] == True]
-    if len(start_candidates) >= 2:
-        start_idx = start_candidates.index[0]
-    else:
-        start_idx = df.index[start_pos]
+    start_idx = select_start_frame(df, release_idx, lookback, start_mode)
     start_row = df.loc[start_idx]
 
     dx = release_row[f"{point}_x"] - start_row[f"{point}_x"]
@@ -269,6 +307,8 @@ def analyze(
     df["throw_release_y"] = release_row[f"{point}_y"]
     df["throw_start_x"] = start_row[f"{point}_x"]
     df["throw_start_y"] = start_row[f"{point}_y"]
+    df["throw_detected_release_frame"] = int(df.loc[detected_release_idx, "frame_index"])
+    df["throw_release_offset_frames"] = release_offset_frames
 
     if output_csv:
         output_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -278,7 +318,15 @@ def analyze(
     print(f"Input CSV: {csv_path}")
     print(f"Hand: {hand}")
     print(f"Motion point: {motion_point}")
+    print(f"Start mode: {start_mode}")
     print(f"Start frame: {int(start_row['frame_index'])} ({start_row['time_sec']:.4f}s)")
+    if release_offset_frames > 0:
+        detected_row = df.loc[detected_release_idx]
+        print(
+            "Detected release frame before offset: "
+            f"{int(detected_row['frame_index'])} ({detected_row['time_sec']:.4f}s)"
+        )
+        print(f"Release offset frames: {release_offset_frames}")
     print(f"Release candidate frame: {int(release_row['frame_index'])} ({release_row['time_sec']:.4f}s)")
     print(f"Release speed threshold: {threshold:.4f}")
     print(f"Release raw speed: {release_row['speed']:.4f}")
@@ -316,6 +364,12 @@ def main():
         help="Landmark used for release timing and throw direction",
     )
     parser.add_argument(
+        "--start-mode",
+        choices=["recent", "video-start"],
+        default="video-start",
+        help="How to choose the throw start frame",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=Path("output/throw_analysis.csv"),
@@ -340,6 +394,12 @@ def main():
         help="Recent frames before release used to estimate final direction",
     )
     parser.add_argument(
+        "--release-offset-frames",
+        type=int,
+        default=0,
+        help="Move the release candidate this many frames earlier.",
+    )
+    parser.add_argument(
         "--min-visibility",
         type=float,
         default=0.5,
@@ -359,6 +419,7 @@ def main():
         args.csv,
         args.hand,
         args.motion_point,
+        args.start_mode,
         args.out,
         args.window,
         args.lookback,
@@ -367,6 +428,7 @@ def main():
         args.board_w,
         args.board_h,
         args.sensitivity,
+        args.release_offset_frames,
     )
 
 
